@@ -389,7 +389,7 @@ def _add_mid_arrow(ax, xv, yv, color, frac=0.18):
     if np.isclose(dx,0) and np.isclose(dy,0): return
     ax.quiver(xv[0]+0.5*dx, yv[0]+0.5*dy, frac*dx, frac*dy,
               angles='xy', scale_units='xy', scale=1, pivot='middle',
-              color=color, width=0.003, headwidth=4.5, headlength=6,
+              color=color, width=0.002, headwidth=4.5, headlength=6,
               headaxislength=5, zorder=5)
 
 
