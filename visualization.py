@@ -152,26 +152,43 @@ def _quality_isolines_ph(p_lo, p_hi, n_lines=9, n_pts=200):
 
 
 def _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, n_lines=12, n_pts=200):
-    """Sweep temperature at fixed pressure to avoid invalid-entropy regions."""
     p_crit = _q("Pcrit","T",300,"Q",1)
     T_crit = _q("Tcrit","T",300,"Q",1)
     T_trip = _q("Ttriple","T",300,"Q",1)
-
-    # Safe p_lo estimate: use triple-point pressure as lower bound
     p_trip = _q("P","T",T_trip*1.001,"Q",0)
     p_lo_est = max(p_trip*1.1 if np.isfinite(p_trip) else 1e3, 1e3)
     p_vals = np.geomspace(p_lo_est, p_crit*3.0, n_lines)
 
-    # Sweep T over a range that covers the visible window with margin
     T_sweep = np.linspace(max(T_lo*0.9, T_trip*1.001),
                           min(T_hi*1.1, T_crit*2.0), n_pts)
     lines = []
     for p in p_vals:
-        s_arr = np.array([_q("S","P",p,"T",T) for T in T_sweep])
-        v = np.isfinite(s_arr) & (s_arr >= s_lo) & (s_arr <= s_hi) \
-                                & (T_sweep >= T_lo*0.95) & (T_sweep <= T_hi*1.05)
+        if p < p_crit:
+            T_sat = _q("T","P",p,"Q",0)
+            s_sat_l = _q("S","P",p,"Q",0)
+            s_sat_v = _q("S","P",p,"Q",1)
+            if not (np.isfinite(T_sat) and np.isfinite(s_sat_l) and np.isfinite(s_sat_v)):
+                continue
+            # Subcooled branch (T < T_sat), reversed so path runs T_sat → T_lo
+            T_liq = T_sweep[T_sweep < T_sat]
+            s_liq = np.array([_q("S","P",p,"T",T) for T in T_liq])
+            # Superheated branch (T > T_sat)
+            T_vap = T_sweep[T_sweep > T_sat]
+            s_vap = np.array([_q("S","P",p,"T",T) for T in T_vap])
+            # Two-phase horizontal bridge at T_sat
+            s_2ph = np.linspace(s_sat_l, s_sat_v, 20)
+            T_2ph = np.full(20, T_sat)
+            # Stitch: subcooled (low→T_sat) → bridge → superheated (T_sat→high)
+            s_all = np.concatenate([s_liq[::-1], s_2ph, s_vap])
+            T_all = np.concatenate([T_liq[::-1], T_2ph, T_vap])
+        else:
+            s_all = np.array([_q("S","P",p,"T",T) for T in T_sweep])
+            T_all = T_sweep
+
+        v = (np.isfinite(s_all) & (s_all >= s_lo) & (s_all <= s_hi) &
+             (T_all >= T_lo*0.95) & (T_all <= T_hi*1.05))
         if v.sum() > 3:
-            lines.append((s_arr[v], T_sweep[v], p))
+            lines.append((s_all[v], T_all[v], p))
     return lines
 
 
