@@ -364,7 +364,7 @@ def _add_expansion_lines(ax, state, diagram_type):
 
     if diagram_type == "PH":
         h_isenth = np.full_like(p_exp, s["h_ref_3"])
-        line_isenth, = ax.plot(h_isenth, p_exp, color=col, ls="-", lw=1.5,
+        line_isenth, = ax.plot(h_isenth, p_exp, color=col, ls="-.", lw=1.5,
                             alpha=alp, zorder=4,
                             label=r"$\mathrm{Isenthalpic\ expansion}$")
         h_isen = np.array([_q("H","P",p,"S",s["s_ref_3"]) for p in p_exp])
@@ -388,7 +388,7 @@ def _add_expansion_lines(ax, state, diagram_type):
         s_is = np.array([_q("S","P",p,"H",s["h_ref_3"]) for p in p_exp])
         T_is = np.array([_q("T","P",p,"H",s["h_ref_3"]) for p in p_exp])
         v = np.isfinite(s_is)
-        line_isenth, = ax.plot(s_is[v], T_is[v], color=col, ls="-", lw=1.5,
+        line_isenth, = ax.plot(s_is[v], T_is[v], color=col, ls="-.", lw=1.5,
                                alpha=alp, zorder=4,
                                label=r"$\mathrm{Isenthalpic\ expansion}$")
 
