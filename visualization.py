@@ -206,12 +206,33 @@ def _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, n_lines=18, n_pts=200):
     p_arr  = np.geomspace(max(p_lo*0.5, 1e3), p_hi*1.5, n_pts)
     lines  = []
     for T in T_vals:
-        h_arr = np.array([_q("H","P",p,"T",T) for p in p_arr])
-        v = (np.isfinite(h_arr) &
-             (h_arr >= h_lo) & (h_arr <= h_hi) &
-             (p_arr >= p_lo*0.9) & (p_arr <= p_hi*1.1))
+        if T < T_crit:
+            p_sat = _q("P","T",T,"Q",0)
+            h_sat_l = _q("H","T",T,"Q",0)
+            h_sat_v = _q("H","T",T,"Q",1)
+            if not (np.isfinite(p_sat) and np.isfinite(h_sat_l) and np.isfinite(h_sat_v)):
+                continue
+            # Liquid branch (p > p_sat)
+            p_liq = p_arr[p_arr > p_sat]
+            h_liq = np.array([_q("H","P",p,"T",T) for p in p_liq])
+            # Vapour branch (p < p_sat)
+            p_vap = p_arr[p_arr < p_sat]
+            h_vap = np.array([_q("H","P",p,"T",T) for p in p_vap])
+            # Two-phase horizontal bridge at p_sat
+            h_2ph = np.linspace(h_sat_l, h_sat_v, 20)
+            p_2ph = np.full(20, p_sat)
+            # Stitch: liquid (high→p_sat) → bridge → vapour (p_sat→low)
+            h_all = np.concatenate([h_liq[::-1], h_2ph, h_vap[::-1]])
+            p_all = np.concatenate([p_liq[::-1], p_2ph, p_vap[::-1]])
+        else:
+            h_all = np.array([_q("H","P",p,"T",T) for p in p_arr])
+            p_all = p_arr
+
+        v = (np.isfinite(h_all) &
+             (h_all >= h_lo) & (h_all <= h_hi) &
+             (p_all >= p_lo*0.9) & (p_all <= p_hi*1.1))
         if v.sum() > 3:
-            lines.append((h_arr[v], p_arr[v], T))
+            lines.append((h_all[v], p_all[v], T))
     return lines
 
 
