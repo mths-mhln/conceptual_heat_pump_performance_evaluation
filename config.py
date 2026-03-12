@@ -19,12 +19,12 @@ cp_h = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric press
 ΔT_pp_4 = 10                # [K] - pinch point 4
 ΔT_sh = 5                   # [K] - superheat
 ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
-refrigerant = "MM"  # [-] - "R1234ze(Z)", "MM"
+refrigerant = "R1234ze(Z)"  # [-] - "R1234ze(Z)", "MM"
  
  
 # Visualization settings
 # ======================
 visualization_method = "CoolProp"   # "CoolProp" or "NiceProp"  (NiceProp not implemented)
-resolution = "low"                  # "low" or "high"  (affects runtime)
+resolution = "high"                  # "low" or "high"  (affects runtime)
  
 

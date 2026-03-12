@@ -292,7 +292,7 @@ def _put_label(ax, x_val, y_val, ang, label, color):
 
 
 def _draw_isolines_labeled(ax, lines, color, frac, fmt_short, fmt_named,
-                           yscale='linear'):
+                           yscale='linear', flip_q1=False):
     """Draw lines and place labels.
 
     The 'named' label (fmt_named) goes on the isoline whose label point falls
@@ -321,9 +321,10 @@ def _draw_isolines_labeled(ax, lines, color, frac, fmt_short, fmt_named,
         x_v, y_v, ang, in_bounds = info
         if not in_bounds:
             continue
+        if abs(val - 1.0) < 1e-9 and flip_q1:
+            ang += 180
         lbl = fmt_named(val) if k == named_k else fmt_short(val)
         _put_label(ax, x_v, y_v, ang, lbl, color)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Expansion lines + legend
@@ -339,12 +340,12 @@ def _add_expansion_lines(ax, state, diagram_type):
         h_isenth = np.full_like(p_exp, s["h_ref_3"])
         line_isenth, = ax.plot(h_isenth, p_exp, color=col, ls="-", lw=1.5,
                             alpha=alp, zorder=4,
-                            label=r"$\mathrm{isenthalpic\ expansion}$")
+                            label=r"$\mathrm{Isenthalpic\ expansion}$")
         h_isen = np.array([_q("H","P",p,"S",s["s_ref_3"]) for p in p_exp])
         v = np.isfinite(h_isen)
         line_isen, = ax.plot(h_isen[v], p_exp[v], color=col, ls="--", lw=1.5,
                             alpha=alp, zorder=4,
-                            label=r"$\mathrm{isentropic\ expansion}$")
+                            label=r"$\mathrm{Isentropic\ expansion}$")
         # Horizontal connector from isentropic exit → actual cycle point 4
         h_isen_exit = _q("H","P",s["p_ref_1"],"S",s["s_ref_3"])
         ax.plot([h_isen_exit, s["h_ref_4"]], [s["p_ref_1"], s["p_ref_1"]],
@@ -354,7 +355,7 @@ def _add_expansion_lines(ax, state, diagram_type):
         T_rng  = np.linspace(s["T_ref_3"], T_exit, 150)
         line_isen, = ax.plot(np.full_like(T_rng, s["s_ref_3"]), T_rng,
                              color=col, ls="--", lw=1.5, alpha=alp, zorder=4,
-                             label=r"$\mathrm{isentropic\ expansion}$")
+                             label=r"$\mathrm{Isentropic\ expansion}$")
         # Horizontal connector from isentropic exit → actual cycle point 4
         ax.plot([s["s_ref_3"], s["s_ref_4"]], [T_exit, T_exit],
                 color=col, ls="--", lw=1.5, alpha=alp, zorder=4)
@@ -363,10 +364,10 @@ def _add_expansion_lines(ax, state, diagram_type):
         v = np.isfinite(s_is)
         line_isenth, = ax.plot(s_is[v], T_is[v], color=col, ls="-", lw=1.5,
                                alpha=alp, zorder=4,
-                               label=r"$\mathrm{isenthalpic\ expansion}$")
+                               label=r"$\mathrm{Isenthalpic\ expansion}$")
 
     line_turb = Line2D([0],[0], color='green', lw=1.5,
-                       label=r"$\mathrm{turbine\ expansion}$")
+                       label=r"$\mathrm{Turbine\ expansion}$")
     leg = ax.legend(handles=[line_turb, line_isen, line_isenth],
                     loc="lower right", bbox_to_anchor=(0.9875, 0.015),
                     fontsize=8, framealpha=0.85)
@@ -421,8 +422,8 @@ def _draw_perf_box(ax, perf):
     txt = (
         rf"$\begin{{array}}{{lrl}}"
         rf"\multicolumn{{3}}{{c}}{{\mathrm{{Performance}}}} \\\hline "
-        rf"\mathrm{{COP_{{turb}}}}   & \num{{{perf['COP_turb']:.2f}}}   & [-] \\"
         rf"\mathrm{{COP_{{is}}}}     & \num{{{perf['COP_is']:.2f}}}     & [-] \\"
+        rf"\mathrm{{COP_{{turb}}}}   & \num{{{perf['COP_turb']:.2f}}}   & [-] \\"
         rf"\mathrm{{COP_{{isenth}}}} & \num{{{perf['COP_isenth']:.2f}}} & [-] \\"
         rf"\dot{{W}}_{{turb}}        & \num{{{perf['Ẇ_turb']:.0f}}}     & [\mathrm{{W}}] \\"
         rf"\dot{{W}}_{{compr}}       & \num{{{perf['Ẇ_comp']:.0f}}}     & [\mathrm{{W}}] \\"
@@ -467,7 +468,8 @@ def _make_plot_ts(state, perf, ts_data):
         ax, _quality_isolines_ts(T_lo, T_hi, n_pts=n_pts),
         COL_QUALITY, 0.3,
         fmt_short=lambda v: rf"${v:.2f}$",
-        fmt_named =lambda v: rf"$x={v:.2f}$")
+        fmt_named =lambda v: rf"$x={v:.2f}$",
+        flip_q1=(refrigerant == "R1234ze(Z)"))
 
     # Isobar lines — light blue
     _draw_isolines_labeled(
