@@ -13,6 +13,10 @@ from CoolProp.CoolProp import PropsSI
 from config import refrigerant, resolution
 from thermodynamics import isobar_segment   # TS critical-isobar
 
+from config import refrigerant, resolution, \
+    ts_margin_s_left, ts_margin_s_right, ts_margin_T_bot, ts_margin_T_top, \
+    ph_margin_h_left, ph_margin_h_right, ph_margin_p_bot, ph_margin_p_top
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utility
@@ -59,8 +63,8 @@ def _cycle_bounds_ts(state):
     dT = T_hi - T_lo
     # left: 1.0×ds  (room for perf box)   right: 0.5×ds
     # bottom: 0.4×dT                       top:   0.6×dT
-    return (s_lo - ds*0.2, s_hi + ds*0.2,
-            T_lo - dT*0.2, T_hi + dT*0.15)
+    return (s_lo - ds*ts_margin_s_left,  s_hi + ds*ts_margin_s_right,
+            T_lo - dT*ts_margin_T_bot,   T_hi + dT*ts_margin_T_top)
 
 
 def _cycle_bounds_ph(state):
@@ -82,9 +86,10 @@ def _cycle_bounds_ph(state):
     log_p_hi = np.log10(p_hi)
     log_span = log_p_hi - log_p_lo
     # bottom: 0.3 decades below p_lo   top: 0.5 decades above p_hi
-    p_lo_plot = max(10 ** (log_p_lo - 0.1 * max(log_span, 0.3)), 1e2)
-    p_hi_plot = 10 ** (log_p_hi + 0.2 * max(log_span, 0.3))
-    return (h_lo - dh*0.3, h_hi + dh*0.15, p_lo_plot, p_hi_plot)
+    p_lo_plot = max(10 ** (log_p_lo - ph_margin_p_bot * max(log_span, 0.3)), 1e2)
+    p_hi_plot = 10 ** (log_p_hi + ph_margin_p_top * max(log_span, 0.3))
+    return (h_lo - dh*ph_margin_h_left, h_hi + dh*ph_margin_h_right,
+            p_lo_plot, p_hi_plot)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
