@@ -1,18 +1,8 @@
-# thermodynamics.py
-# =================
-# Cycle evaluation (bisection solver), performance metrics, and
-# TS/PH diagram data preparation.
-
 import math
 import itertools
 import numpy as np
 from CoolProp.CoolProp import PropsSI
 
-from config import (
-    T_c_in, T_h_in, ṁ_c, cp_c, ṁ_h, cp_h,
-    η_turb, η_compr, ΔT_pp_1, ΔT_pp_2, ΔT_pp_3, ΔT_pp_4,
-    ΔT_sh, ɳ_shaft, refrigerant, resolution
-)
 
 
 # Helpers
@@ -26,8 +16,10 @@ def vapour_quality_scaler(Q):
     return Q
 
 
-def isobar_segment(s_start, s_end, p):
+def isobar_segment(s_start, s_end, p, cycle_config, general_config):
     """Return (s_range, T_range) along a constant-pressure path (TS diagram)."""
+    resolution = general_config["resolution"]
+    refrigerant = cycle_config["refrigerant"]
     num_points = 150 if resolution == "low" else 1000
     s_range = np.linspace(s_start, s_end, num=num_points)
     T_range = np.zeros(num_points)
@@ -46,9 +38,40 @@ def isobar_h_segment(h_start, h_end, p):
     return h_range.tolist(), p_range.tolist()
 
 
+def heat_from_isobar_path(T_start, T_end, p, general_config):
+    """Return heat transfer along an isobaric path from T_start to T_end."""
+    num_points = 150 if general_config["resolution"] == "low" else 1000
+    T_range = np.linspace(T_start, T_end, num=num_points)
+    heat = 0
+    for T in T_range:
+        try:
+            cp = PropsSI("C", "P", p, "T", T, f"REFPROP::{refrigerant}")
+            heat += cp * (T_end - T_start) / num_points
+        except ValueError:
+            pass
+    return heat
+
+
+
 # Cycle solver (bisection on pressure ratio)
 # ==========================================
-def solve_cycle():
+def solve_cycle(cycle_config):
+    # Extract parameters from cycle_config
+    refrigerant = cycle_config["refrigerant"]
+    T_h_in      = cycle_config["T_h_in"]
+    T_c_in      = cycle_config["T_c_in"]
+    ṁ_h         = cycle_config["ṁ_h"]
+    ṁ_c         = cycle_config["ṁ_c"]
+    cp_h        = cycle_config["cp_h"]
+    cp_c        = cycle_config["cp_c"]
+    η_compr     = cycle_config["η_compr"]
+    η_turb      = cycle_config["η_turb"]
+    ΔT_pp_1     = cycle_config["ΔT_pp_1"]
+    ΔT_pp_2     = cycle_config["ΔT_pp_2"]
+    ΔT_pp_3     = cycle_config["ΔT_pp_3"]
+    ΔT_pp_4     = cycle_config["ΔT_pp_4"]
+    ΔT_sh       = cycle_config["ΔT_sh"]
+
     # Station 1 — compressor inlet (fixed by user inputs)
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
     p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
@@ -96,6 +119,7 @@ def solve_cycle():
         h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
         T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
         Q_ref_4 = vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
+        Q_ref_4_isenth = vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
         s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
 
         # Specific heats
@@ -128,6 +152,8 @@ def solve_cycle():
             + (T_ref_4 - T_ev) * cp_ref_4 * ṁ_ref
         ) / (ṁ_h * cp_h)
 
+        # evaluate heating stream at pinch point 4
+        T_h_pp_4 = T_h_out + 
         ΔT_pp_4_calculated = T_h_out - T_ref_4
 
         # Bisection update
@@ -143,9 +169,10 @@ def solve_cycle():
             p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
             p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
             p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
-            T_cond=T_cond, T_ev=T_ev,
+            T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev,
             T_c_out=T_c_out, T_h_out=T_h_out, T_c_pp_2=T_c_pp_2,
-            ṁ_ref=ṁ_ref, cp_ref_2=cp_ref_2,
+            ṁ_ref=ṁ_ref, cp_ref_2=cp_ref_2, Q_ref_4_isenth=Q_ref_4_isenth,
+            cp_ref_1=cp_ref_1, cp_ref_3=cp_ref_3, cp_ref_4=cp_ref_4
         )
 
     return state
@@ -153,12 +180,25 @@ def solve_cycle():
 
 # Performance metrics
 # ===================
-def compute_performance(state):
+def compute_performance(state, cycle_config):
     s = state
+    ṁ_c = cycle_config["ṁ_c"]
+    cp_c = cycle_config["cp_c"]
+    T_c_in = cycle_config["T_c_in"]
+    ṁ_h = cycle_config["ṁ_h"]
+    cp_h = cycle_config["cp_h"]
+    T_h_in = cycle_config["T_h_in"]
+    ɳ_shaft = cycle_config["ɳ_shaft"]
+    refrigerant = cycle_config["refrigerant"]
+
     Ẇ_turb = s["ṁ_ref"] * (s["h_ref_3"] - s["h_ref_4"])
     Ẇ_comp = s["ṁ_ref"] * (s["h_ref_2"] - s["h_ref_1"])
     Q_out   = ṁ_c * cp_c * (s["T_c_out"] - T_c_in)
     Q_in    = ṁ_h * cp_h * (T_h_in - s["T_h_out"])
+    Q_in    = s["ṁ_ref"] * (s["T_ref_1"] - s["T_ev"]) * s["cp_ref_1"] + s["ṁ_ref"] * s["Δh_ev"] * (s["Q_ref_1"] - s["Q_ref_4"]) + s["ṁ_ref"] * (s["T_ref_4"] - s["T_ev"]) * s["cp_ref_4"]
+
+    # isenthalpic Q_in
+    Q_in_isenth = s["ṁ_ref"] * s["Δh_ev"] * (s["Q_ref_1"] - s["Q_ref_4_isenth"]) + s["ṁ_ref"] * (s["T_ref_1"] - s["T_ev"]) * s["cp_ref_1"] + s["ṁ_ref"] * (s["T_ref_4"] - s["T_ev"]) * s["cp_ref_4"]
 
     # COP with actual turbine expansion
     COP_turb = Q_out / (Ẇ_comp - Ẇ_turb * ɳ_shaft)
@@ -174,13 +214,18 @@ def compute_performance(state):
     return dict(
         Ẇ_turb=Ẇ_turb, Ẇ_comp=Ẇ_comp, Q_out=Q_out, Q_in=Q_in,
         COP_turb=COP_turb, COP_is=COP_is, COP_isenth=COP_isenth,
+        Q_in_isenth=Q_in_isenth, PR=s["p_ref_2"] / s["p_ref_1"]
     )
 
 
 # Diagram data preparation
 # ========================
-def build_ts_data(state):
+def build_ts_data(state, cycle_config, general_config):
     s = state
+    refrigerant = cycle_config["refrigerant"]
+    T_c_in = cycle_config["T_c_in"]
+    T_h_in = cycle_config["T_h_in"]
+
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
 
     # Saturation entropy values at both pressures
@@ -194,16 +239,16 @@ def build_ts_data(state):
     # Only insert the liquid inflection if point 3 is subcooled (s3 < s_bubble).
     s_23_chain, T_23_chain = [], []
     if s["s_ref_2"] > s_ref_23_v_inflection:
-        seg_s, seg_T = isobar_segment(s["s_ref_2"], s_ref_23_v_inflection, p2)
+        seg_s, seg_T = isobar_segment(s["s_ref_2"], s_ref_23_v_inflection, p2, cycle_config, general_config)
         s_23_chain += seg_s + [s_ref_23_v_inflection]
         T_23_chain += seg_T + [s["T_cond"]]
     if s["s_ref_3"] < s_ref_23_l_inflection:
-        seg_s, seg_T = isobar_segment(s_ref_23_l_inflection, s["s_ref_3"], p2)
+        seg_s, seg_T = isobar_segment(s_ref_23_l_inflection, s["s_ref_3"], p2, cycle_config, general_config)
         s_23_chain += [s_ref_23_l_inflection] + seg_s
         T_23_chain += [s["T_cond"]] + seg_T
     # If neither branch triggered, the whole 2->3 leg is inside the dome
     if not s_23_chain:
-        seg_s, seg_T = isobar_segment(s["s_ref_2"], s["s_ref_3"], p2)
+        seg_s, seg_T = isobar_segment(s["s_ref_2"], s["s_ref_3"], p2, cycle_config, general_config)
         s_23_chain, T_23_chain = seg_s, seg_T
 
     # Evaporator path 4 -> 1:
@@ -211,15 +256,15 @@ def build_ts_data(state):
     # Only insert the vapour inflection if point 1 is superheated (s1 > s_dew).
     s_41_chain, T_41_chain = [], []
     if s["s_ref_4"] < s_ref_41_l_inflection:
-        seg_s, seg_T = isobar_segment(s["s_ref_4"], s_ref_41_l_inflection, p1)
+        seg_s, seg_T = isobar_segment(s["s_ref_4"], s_ref_41_l_inflection, p1, cycle_config, general_config)
         s_41_chain += seg_s + [s_ref_41_l_inflection]
         T_41_chain += seg_T + [s["T_ev"]]
     if s["s_ref_1"] > s_ref_41_v_inflection:
-        seg_s, seg_T = isobar_segment(s_ref_41_v_inflection, s["s_ref_1"], p1)
+        seg_s, seg_T = isobar_segment(s_ref_41_v_inflection, s["s_ref_1"], p1, cycle_config, general_config)
         s_41_chain += [s_ref_41_v_inflection] + seg_s
         T_41_chain += [s["T_ev"]] + seg_T
     if not s_41_chain:
-        seg_s, seg_T = isobar_segment(s["s_ref_4"], s["s_ref_1"], p1)
+        seg_s, seg_T = isobar_segment(s["s_ref_4"], s["s_ref_1"], p1, cycle_config, general_config)
         s_41_chain, T_41_chain = seg_s, seg_T
 
     s_ref_lst = list(itertools.chain(
@@ -256,8 +301,9 @@ def build_ts_data(state):
     )
 
 
-def build_ph_data(state):
+def build_ph_data(state, cycle_config):
     s = state
+    refrigerant = cycle_config["refrigerant"]
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
 
     # Saturation enthalpy values at both pressures

@@ -1,37 +1,52 @@
-# visualization.py
-# ================
-# All isolines computed manually via PropsSI over cycle-derived axis bounds.
-# No CoolProp PropertyPlot used anywhere.
-
 import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.lines import Line2D
 from CoolProp.CoolProp import PropsSI
+from logger import setup_logger
+from pathlib import Path
 
-from config import refrigerant, resolution
+from config import cycle_config, general_config
 from thermodynamics import isobar_segment   # TS critical-isobar
 
-from config import refrigerant, resolution, \
-    ts_margin_s_left, ts_margin_s_right, ts_margin_T_bot, ts_margin_T_top, \
-    ph_margin_h_left, ph_margin_h_right, ph_margin_p_bot, ph_margin_p_top
+refrigerant = cycle_config["refrigerant"]
+resolution = general_config["resolution"]
+ts_margin_s_left = general_config["ts_margin_s_left"]
+ts_margin_s_right = general_config["ts_margin_s_right"]
+ts_margin_T_bot = general_config["ts_margin_T_bot"]
+ts_margin_T_top = general_config["ts_margin_T_top"]
+ph_margin_h_left = general_config["ph_margin_h_left"]
+ph_margin_h_right = general_config["ph_margin_h_right"]
+ph_margin_p_bot = general_config["ph_margin_p_bot"]
+ph_margin_p_top = general_config["ph_margin_p_top"]
+
+logger = setup_logger()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Utility
-# ─────────────────────────────────────────────────────────────────────────────
-
+# =======
 def configure_matplotlib():
     plt.rcParams.update({
         "text.usetex": True,
-        "font.family": "Helvetica",
+        "font.family": "serif",
+        "font.serif": ["Computer Modern Roman"],
         "text.latex.preamble": (
+            r"\usepackage[T1]{fontenc}"
+            r"\usepackage{lmodern}"
             r"\usepackage{siunitx}"
             r"\sisetup{group-separator={\,},group-minimum-digits=4}"
         ),
     })
 
+
+def _cop_type_to_latex(cop_key):
+    """Convert keys like 'COP_turb' into a LaTeX label body."""
+    parts = cop_key.split("_", 1)
+    if len(parts) == 2:
+        return rf"\mathrm{{{parts[0]}}}_{{\mathrm{{{parts[1]}}}}}"
+    return rf"\mathrm{{{cop_key}}}"
 
 def _q(out, *args):
     """PropsSI wrapper — returns np.nan on any failure."""
@@ -41,10 +56,9 @@ def _q(out, *args):
         return np.nan
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Axis-bound calculation
-# ─────────────────────────────────────────────────────────────────────────────
 
+# Axis-bound calculation
+# ======================
 def _cycle_bounds_ts(state):
     s_vals = [state[k] for k in ("s_ref_1","s_ref_2","s_ref_3","s_ref_4")]
     T_vals = [state[k] for k in ("T_ref_1","T_ref_2","T_ref_3","T_ref_4")]
@@ -92,10 +106,9 @@ def _cycle_bounds_ph(state):
             p_lo_plot, p_hi_plot)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Saturation dome
-# ─────────────────────────────────────────────────────────────────────────────
 
+# Saturation dome
+# ===============
 def _saturation_dome_ts(n=400):
     p_crit = _q("Pcrit","T",300,"Q",1)
     T_crit = _q("Tcrit","T",300,"Q",1)
@@ -120,10 +133,9 @@ def _saturation_dome_ph(n=400):
             np.concatenate([p_arr, [p_crit], p_arr[::-1]]))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Isoline computation
-# ─────────────────────────────────────────────────────────────────────────────
 
+# Isoline computation
+# ===================
 def _quality_isolines_ts(T_lo, T_hi, n_lines=9, n_pts=200):
     T_crit = _q("Tcrit","T",300,"Q",1)
     T_trip = _q("Ttriple","T",300,"Q",1)
@@ -274,10 +286,9 @@ def _isentrop_lines_ph(h_lo, h_hi, p_lo, p_hi, n_lines=12, n_pts=200):
     return lines
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Label placement — NO transData dependency (works before canvas draw)
-# ─────────────────────────────────────────────────────────────────────────────
 
+# Label placement
+# ===============
 def _label_angle(x_data, y_data, idx, xl, xh, yl, yh, yscale, ax):
     """Compute rotation angle in degrees for a label at index idx.
 
@@ -369,10 +380,10 @@ def _draw_isolines_labeled(ax, lines, color, frac, fmt_short, fmt_named,
         lbl = fmt_named(val) if k == named_k else fmt_short(val)
         _put_label(ax, x_v, y_v, ang, lbl, color)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Expansion lines + legend
-# ─────────────────────────────────────────────────────────────────────────────
 
+
+# Expansion lines + legend
+# ========================
 def _add_expansion_lines(ax, state, diagram_type):
     s     = state
     p_exp = np.linspace(s["p_ref_3"], s["p_ref_1"], 150)
@@ -422,10 +433,9 @@ def _add_expansion_lines(ax, state, diagram_type):
     leg.set_zorder(11)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Arrow / endpoint label helpers (TS)
-# ─────────────────────────────────────────────────────────────────────────────
 
+# Arrow / endpoint label helpers (TS)
+# ===================================
 def _add_mid_arrow(ax, xv, yv, color, frac=0.18):
     if len(xv) < 2: return
     dx, dy = xv[1]-xv[0], yv[1]-yv[0]
@@ -457,10 +467,9 @@ def _add_endpoint_labels(ax, xv, yv, lbl0, lbl1, color, side=1):
                     zorder=6, clip_on=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Performance box
-# ─────────────────────────────────────────────────────────────────────────────
 
+# Performance box
+# ===============
 def _draw_perf_box(ax, perf):
     txt = (
         rf"$\begin{{array}}{{lrl}}"
@@ -479,9 +488,9 @@ def _draw_perf_box(ax, perf):
                       linewidth=1.2, boxstyle='round,pad=0.5'))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Colour palette
-# ─────────────────────────────────────────────────────────────────────────────
+# ==============
 # TS:  quality → dark blue  | isobars → light blue  | isenthalps → orange
 # PH:  quality → dark blue  | isentropes → light blue | isotherms → orange
 COL_QUALITY    = '#1a3a6b'   # dark blue
@@ -489,10 +498,9 @@ COL_ISOBAR_ISO = '#6ab0de'   # light blue  (isobars on TS, isentropes on PH)
 COL_ISENTH_ISO = '#e07b20'   # orange      (isenthalps on TS, isotherms on PH)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TS renderer
-# ─────────────────────────────────────────────────────────────────────────────
 
+# TS renderer
+# ===========
 def _make_plot_ts(state, perf, ts_data):
     warnings.filterwarnings("ignore")
     n_pts = 150 if resolution == "low" else 600
@@ -531,7 +539,7 @@ def _make_plot_ts(state, perf, ts_data):
     # Critical isobar (dotted) — filter zeros / invalid T values
     p_crit = _q("Pcrit","T",300,"Q",1)
     T_crit = _q("Tcrit","T",300,"Q",1)
-    sc, Tc = isobar_segment(s_lo, s_hi, p_crit)
+    sc, Tc = isobar_segment(s_lo, s_hi, p_crit, cycle_config, general_config)
     sc = np.array(sc); Tc = np.array(Tc)
     valid = (Tc > T_lo) & (Tc <= T_hi * 1.05) & np.isfinite(Tc) & (Tc > 1.0)
     if valid.any():
@@ -566,10 +574,9 @@ def _make_plot_ts(state, perf, ts_data):
     return fig
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PH renderer
-# ─────────────────────────────────────────────────────────────────────────────
 
+# PH renderer
+# ===========
 def _make_plot_ph(state, perf, ph_data):
     warnings.filterwarnings("ignore")
     n_pts = 150 if resolution == "low" else 600
@@ -640,15 +647,76 @@ def _make_plot_ph(state, perf, ph_data):
     return fig
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Public entry point
-# ─────────────────────────────────────────────────────────────────────────────
 
-def make_plot(state, perf, diagram_type, ts_data=None, ph_data=None):
+# Public entry point for TS or PH plotting
+# ========================================
+def make_thdy_plot(state, perf, diagram_type, ts_data=None, ph_data=None):
     configure_matplotlib()
     fig = _make_plot_ts(state, perf, ts_data) if diagram_type == "TS" \
           else _make_plot_ph(state, perf, ph_data)
     fname = f"Conceptual HP Cycle - {refrigerant} - {diagram_type}.pdf"
-    fig.savefig(fname, dpi=1000, bbox_inches="tight")
-    print(f"Saved: {fname}")
+    Path("./thermodynamic_diagrams").mkdir(parents=True, exist_ok=True)
+    Path("./thermodynamic_diagrams/" + f"{refrigerant}/").mkdir(parents=True, exist_ok=True)
+    fig.savefig("thermodynamic_diagrams/" + f"{refrigerant}/" + fname, dpi=1000, bbox_inches="tight")
+    logger.info(f"Saved: .\\thermodynamic_diagrams\\{fname}\n")
     return fig
+
+
+
+# Public entry point for COP_vs_eff_investigation
+# ===============================================
+def make_COP_vs_eff_plot(X, Y, Z):
+    """
+    X, Y : 2D meshgrids (η_turb, η_compr)
+    Z    : 2D COP values on the same grid
+    """
+    configure_matplotlib()      
+    cop_type = "COP_turb"
+    cop_type_latex = _cop_type_to_latex(cop_type)
+
+    # 2D heatmap with labeled isolines
+    fig, ax = plt.subplots(figsize=(9.5, 7.5))
+
+    # Filled heatmap
+    cf = ax.contourf(X, Y, Z, levels=30, cmap='viridis', extend='neither')
+
+    # Black contour lines + value labels on the isolines 
+    cl = ax.contour(X, Y, Z, levels=12, colors='black', linewidths=0.8, linestyles='-')
+    ax.clabel(cl, inline=True, fontsize=9, fmt='%.2f', colors='white',
+              manual=False, inline_spacing=3)
+
+    # Colorbar and labels
+    cbar = plt.colorbar(cf, ax=ax, label=rf'${cop_type_latex}$')
+    cbar.ax.tick_params(labelsize=10)
+
+    ax.set_xlabel(r'$\eta_{\mathrm{turb}}$')
+    ax.set_ylabel(r'$\eta_{\mathrm{compr}}$')
+    ax.set_title(rf'${cop_type_latex}\ \mathrm{{vs}}\ \eta_{{\mathrm{{turb}}}},\ \eta_{{\mathrm{{compr}}}}\ (\mathrm{{{refrigerant}}})$')
+    # ax.grid(True, alpha=0.3)
+
+    # Save 
+    fname2d = f"{cop_type}_vs_Efficiencies_{refrigerant}.pdf"
+    fig.savefig("COP_investigations/" + f"{refrigerant}/" + fname2d, dpi=1000, bbox_inches='tight')
+    logger.info(f"Saved: .\\COP_investigations\\{fname2d}")
+    plt.close(fig)
+
+    # 3D surface
+    fig3d = plt.figure(figsize=(11, 8))
+    ax3d = fig3d.add_subplot(111, projection='3d')
+
+    surf = ax3d.plot_surface(X, Y, Z, cmap='viridis', linewidth=0.2,
+                             antialiased=True, alpha=0.95, rstride=1, cstride=1)
+
+    fig3d.colorbar(surf, ax=ax3d, shrink=0.6, aspect=10, label=rf'${cop_type_latex}$')
+
+    ax3d.set_xlabel(r'$\eta_{\mathrm{turb}}$')
+    ax3d.set_ylabel(r'$\eta_{\mathrm{compr}}$')
+    ax3d.set_zlabel(rf'${cop_type_latex}$')
+    ax3d.set_title(rf'$\mathrm{{3D}}\ {cop_type_latex}\ (\mathrm{{{refrigerant}}})$')
+
+    fname3d = f"{cop_type}_vs_Efficiencies_{refrigerant}_3D.pdf"
+    Path("./COP_investigations").mkdir(parents=True, exist_ok=True)
+    Path("./COP_investigations/" + f"{refrigerant}/").mkdir(parents=True, exist_ok=True)
+    fig3d.savefig("COP_investigations/" + f"{refrigerant}/" + fname3d, dpi=800, bbox_inches='tight')
+    logger.info(f"Saved: .\\COP_investigations\\{fname3d}")
+    plt.close(fig3d)
