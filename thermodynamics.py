@@ -38,15 +38,15 @@ def isobar_h_segment(h_start, h_end, p):
     return h_range.tolist(), p_range.tolist()
 
 
-def heat_from_isobar_path(T_start, T_end, p, general_config):
+def heat_from_isobar_path(T_start, T_end, p, general_config, cycle_config):
     """Return heat transfer along an isobaric path from T_start to T_end."""
     num_points = 150 if general_config["resolution"] == "low" else 1000
     T_range = np.linspace(T_start, T_end, num=num_points)
     heat = 0
     for T in T_range:
         try:
-            cp = PropsSI("C", "P", p, "T", T, f"REFPROP::{refrigerant}")
-            heat += cp * (T_end - T_start) / num_points
+            cp = PropsSI("C", "P", p, "T", T, f"REFPROP::{cycle_config['refrigerant']}")
+            heat += cp * np.abs(T_end - T_start) / num_points
         except ValueError:
             pass
     return heat
@@ -55,7 +55,7 @@ def heat_from_isobar_path(T_start, T_end, p, general_config):
 
 # Cycle solver (bisection on pressure ratio)
 # ==========================================
-def solve_cycle(cycle_config):
+def solve_subcritical_cycle(cycle_config, general_config):
     # Extract parameters from cycle_config
     refrigerant = cycle_config["refrigerant"]
     T_h_in      = cycle_config["T_h_in"]
@@ -137,24 +137,24 @@ def solve_cycle(cycle_config):
         # Pinch-point 2 heat balance → ṁ_ref
         T_c_pp_2 = T_cond - ΔT_pp_2
         ṁ_ref = ((T_c_pp_2 - T_c_in) * ṁ_c * cp_c /
-                 (Δh_cond * (Q_ref_2 - Q_ref_3) + (T_cond - T_ref_3) * cp_ref_3))
+                 (Δh_cond * (Q_ref_2 - Q_ref_3) + heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config)))
 
         # Outlet temperatures
         T_c_out = T_c_in + (
-            (T_ref_2 - T_cond) * ṁ_ref * cp_ref_2
+            heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config) * ṁ_ref
             + (Q_ref_2 - Q_ref_3) * Δh_cond * ṁ_ref
-            + (T_cond - T_ref_3) * cp_ref_3 * ṁ_ref
+            + heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config) * ṁ_ref
         ) / (ṁ_c * cp_c)
 
         T_h_out = T_h_in - (
-            (T_ref_1 - T_ev) * ṁ_ref * cp_ref_1
+            heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config) * ṁ_ref
             + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
-            + (T_ref_4 - T_ev) * cp_ref_4 * ṁ_ref
+            + heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config) * ṁ_ref
         ) / (ṁ_h * cp_h)
 
         # evaluate heating stream at pinch point 4
-        T_h_pp_4 = T_h_out + 
-        ΔT_pp_4_calculated = T_h_out - T_ref_4
+        T_h_pp_4 = heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config) / (ṁ_h * cp_h) + T_h_out
+        ΔT_pp_4_calculated = T_h_pp_4 - T_ev
 
         # Bisection update
         if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
@@ -176,6 +176,8 @@ def solve_cycle(cycle_config):
         )
 
     return state
+
+
 
 
 # Performance metrics
@@ -214,7 +216,8 @@ def compute_performance(state, cycle_config):
     return dict(
         Ẇ_turb=Ẇ_turb, Ẇ_comp=Ẇ_comp, Q_out=Q_out, Q_in=Q_in,
         COP_turb=COP_turb, COP_is=COP_is, COP_isenth=COP_isenth,
-        Q_in_isenth=Q_in_isenth, PR=s["p_ref_2"] / s["p_ref_1"]
+        Q_in_isenth=Q_in_isenth, PR=s["p_ref_2"] / s["p_ref_1"],
+        ṁ_ref=s["ṁ_ref"]
     )
 
 

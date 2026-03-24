@@ -1,6 +1,6 @@
 # Analysis Type
 # =============
-analysis_type = "COP_vs_eff_investigation"
+analysis_type = "single_configuration"
 # single_configuration       | evaluates conceptual heat pump cycle according to specifications
 # COP_vs_eff_investigation   | evaluates COP variation for different values of turbine and compressor efficiencies
 
@@ -8,12 +8,12 @@ analysis_type = "COP_vs_eff_investigation"
 # Cycle Specifications (thermodynamic inputs)
 # ===========================================
 T_c_in = 353.15             # [K] - 80 degC
-T_h_in = 297.15             # [K] - 15 degC (outside temp)
+T_h_in = 287.15             # [K] - 15 degC (outside temp)
 ṁ_c = 42                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
 cp_c = 1885                 # [J/kg/K] - steam at 250 degrees
 ṁ_h = 40                    # [kg/s] - arbitrarily chosen
 cp_h = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
-η_turb = 0.70               # [-] - from turbine maps
+η_turb = 0.87               # [-] - from turbine maps
 η_compr = 0.78              # [-] - from compressor maps
 ΔT_pp_1 = 10                # [K] - pinch point 1
 ΔT_pp_2 = 10                # [K] - pinch point 2
@@ -21,7 +21,7 @@ cp_h = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric press
 ΔT_pp_4 = 10                # [K] - pinch point 4
 ΔT_sh = 5                   # [K] - superheat
 ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
-refrigerant = "R1233zd(E)"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)"
+refrigerant = "R1234ze(Z)"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)"
 
 cycle_config = {
     "T_c_in": T_c_in,

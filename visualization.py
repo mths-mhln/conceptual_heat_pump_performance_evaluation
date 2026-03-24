@@ -7,10 +7,9 @@ from CoolProp.CoolProp import PropsSI
 from logger import setup_logger
 from pathlib import Path
 
-from config import cycle_config, general_config
+from config import general_config
 from thermodynamics import isobar_segment   # TS critical-isobar
 
-refrigerant = cycle_config["refrigerant"]
 resolution = general_config["resolution"]
 ts_margin_s_left = general_config["ts_margin_s_left"]
 ts_margin_s_right = general_config["ts_margin_s_right"]
@@ -48,25 +47,60 @@ def _cop_type_to_latex(cop_key):
         return rf"\mathrm{{{parts[0]}}}_{{\mathrm{{{parts[1]}}}}}"
     return rf"\mathrm{{{cop_key}}}"
 
-def _q(out, *args):
+def _q(out, *args, cycle_config):
     """PropsSI wrapper — returns np.nan on any failure."""
+    refrigerant = cycle_config["refrigerant"]
     try:
         return PropsSI(out, *args, f"REFPROP::{refrigerant}")
     except Exception:
         return np.nan
 
 
+def _verification_path_with_isenthalpic_expansion(verification_data, cycle_config, n_pts=80):
+    """Return verification-cycle arrays with segment 5->6 rebuilt as isenthalpic."""
+    T_arr = np.array(verification_data[0, :], dtype=float)
+    p_arr = np.array(verification_data[1, :], dtype=float)
+    h_arr = np.array(verification_data[2, :], dtype=float)
+    s_arr = np.array(verification_data[3, :], dtype=float)
+
+    if len(T_arr) <= 6:
+        return T_arr, p_arr, h_arr, s_arr
+
+    p_start = p_arr[5]
+    p_end = p_arr[6]
+    h_const = h_arr[5]
+
+    p_seg = np.linspace(p_start, p_end, n_pts)
+    T_seg = np.array([_q("T", "P", p, "H", h_const, cycle_config=cycle_config) for p in p_seg])
+    s_seg = np.array([_q("S", "P", p, "H", h_const, cycle_config=cycle_config) for p in p_seg])
+
+    v = np.isfinite(T_seg) & np.isfinite(s_seg)
+    if v.sum() < 4:
+        return T_arr, p_arr, h_arr, s_arr
+
+    p_mid = p_seg[v][1:-1]
+    T_mid = T_seg[v][1:-1]
+    s_mid = s_seg[v][1:-1]
+    h_mid = np.full_like(p_mid, h_const)
+
+    T_new = np.concatenate([T_arr[:6], T_mid, T_arr[6:]])
+    p_new = np.concatenate([p_arr[:6], p_mid, p_arr[6:]])
+    h_new = np.concatenate([h_arr[:6], h_mid, h_arr[6:]])
+    s_new = np.concatenate([s_arr[:6], s_mid, s_arr[6:]])
+    return T_new, p_new, h_new, s_new
+
+
 
 # Axis-bound calculation
 # ======================
-def _cycle_bounds_ts(state):
+def _cycle_bounds_ts(state, cycle_config):
     s_vals = [state[k] for k in ("s_ref_1","s_ref_2","s_ref_3","s_ref_4")]
     T_vals = [state[k] for k in ("T_ref_1","T_ref_2","T_ref_3","T_ref_4")]
 
     # Always include the critical point
-    p_crit = _q("Pcrit","T",300,"Q",1)
-    T_crit = _q("Tcrit","T",300,"Q",1)
-    s_crit = _q("S","P",p_crit,"T",T_crit)
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    s_crit = _q("S", "P", p_crit, "T", T_crit, cycle_config=cycle_config)
     if np.isfinite(s_crit) and np.isfinite(T_crit):
         s_vals.append(s_crit)
         T_vals.append(T_crit)
@@ -81,14 +115,14 @@ def _cycle_bounds_ts(state):
             T_lo - dT*ts_margin_T_bot,   T_hi + dT*ts_margin_T_top)
 
 
-def _cycle_bounds_ph(state):
+def _cycle_bounds_ph(state, cycle_config):
     h_vals = [state[k] for k in ("h_ref_1","h_ref_2","h_ref_3","h_ref_4")]
     p_vals = [state[k] for k in ("p_ref_1","p_ref_2","p_ref_3","p_ref_4")]
 
     # Always include the critical point
-    p_crit = _q("Pcrit","T",300,"Q",1)
-    T_crit = _q("Tcrit","T",300,"Q",1)
-    h_crit = _q("H","P",p_crit,"T",T_crit)
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    h_crit = _q("H", "P", p_crit, "T", T_crit, cycle_config=cycle_config)
     if np.isfinite(h_crit) and np.isfinite(p_crit):
         h_vals.append(h_crit)
         p_vals.append(p_crit)
@@ -109,26 +143,26 @@ def _cycle_bounds_ph(state):
 
 # Saturation dome
 # ===============
-def _saturation_dome_ts(n=400):
-    p_crit = _q("Pcrit","T",300,"Q",1)
-    T_crit = _q("Tcrit","T",300,"Q",1)
-    T_trip = _q("Ttriple","T",300,"Q",1)
+def _saturation_dome_ts(cycle_config, n=400):
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_arr  = np.linspace(T_trip*1.001, T_crit*0.9999, n)
-    s_liq  = np.array([_q("S","T",T,"Q",0) for T in T_arr])
-    s_vap  = np.array([_q("S","T",T,"Q",1) for T in T_arr])
-    s_crit = _q("S","P",p_crit,"T",T_crit)
+    s_liq  = np.array([_q("S", "T", T, "Q", 0, cycle_config=cycle_config) for T in T_arr])
+    s_vap  = np.array([_q("S", "T", T, "Q", 1, cycle_config=cycle_config) for T in T_arr])
+    s_crit = _q("S", "P", p_crit, "T", T_crit, cycle_config=cycle_config)
     return (np.concatenate([s_liq, [s_crit], s_vap[::-1]]),
             np.concatenate([T_arr, [T_crit], T_arr[::-1]]))
 
 
-def _saturation_dome_ph(n=400):
-    p_crit = _q("Pcrit","T",300,"Q",1)
-    T_trip = _q("Ttriple","T",300,"Q",1)
-    p_trip = _q("P","T",T_trip*1.001,"Q",0)
+def _saturation_dome_ph(cycle_config, n=400):
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
+    p_trip = _q("P", "T", T_trip*1.001, "Q", 0, cycle_config=cycle_config)
     p_arr  = np.geomspace(p_trip*1.01, p_crit*0.9999, n)
-    h_liq  = np.array([_q("H","P",p,"Q",0) for p in p_arr])
-    h_vap  = np.array([_q("H","P",p,"Q",1) for p in p_arr])
-    h_crit = _q("H","P",p_crit,"Q",0.5)
+    h_liq  = np.array([_q("H", "P", p, "Q", 0, cycle_config=cycle_config) for p in p_arr])
+    h_vap  = np.array([_q("H", "P", p, "Q", 1, cycle_config=cycle_config) for p in p_arr])
+    h_crit = _q("H", "P", p_crit, "Q", 0.5, cycle_config=cycle_config)
     return (np.concatenate([h_liq, [h_crit], h_vap[::-1]]),
             np.concatenate([p_arr, [p_crit], p_arr[::-1]]))
 
@@ -136,38 +170,38 @@ def _saturation_dome_ph(n=400):
 
 # Isoline computation
 # ===================
-def _quality_isolines_ts(T_lo, T_hi, n_lines=9, n_pts=200):
-    T_crit = _q("Tcrit","T",300,"Q",1)
-    T_trip = _q("Ttriple","T",300,"Q",1)
+def _quality_isolines_ts(T_lo, T_hi, cycle_config, n_lines=9, n_pts=200):
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_arr  = np.linspace(max(T_lo, T_trip*1.001), min(T_hi, T_crit*0.9999), n_pts)
     lines  = []
     for Q in np.linspace(0, 1, n_lines):
-        s_arr = np.array([_q("S","T",T,"Q",Q) for T in T_arr])
+        s_arr = np.array([_q("S", "T", T, "Q", Q, cycle_config=cycle_config) for T in T_arr])
         v = np.isfinite(s_arr)
         if v.sum() > 3:
             lines.append((s_arr[v], T_arr[v], Q))
     return lines
 
 
-def _quality_isolines_ph(p_lo, p_hi, n_lines=9, n_pts=200):
-    p_crit = _q("Pcrit","T",300,"Q",1)
-    T_trip = _q("Ttriple","T",300,"Q",1)
-    p_trip = _q("P","T",T_trip*1.001,"Q",0)
+def _quality_isolines_ph(p_lo, p_hi, cycle_config, n_lines=9, n_pts=200):
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
+    p_trip = _q("P", "T", T_trip*1.001, "Q", 0, cycle_config=cycle_config)
     p_arr  = np.geomspace(max(p_lo*0.5, p_trip*1.01), min(p_hi, p_crit*0.9999), n_pts)
     lines  = []
     for Q in np.linspace(0, 1, n_lines):
-        h_arr = np.array([_q("H","P",p,"Q",Q) for p in p_arr])
+        h_arr = np.array([_q("H", "P", p, "Q", Q, cycle_config=cycle_config) for p in p_arr])
         v = np.isfinite(h_arr)
         if v.sum() > 3:
             lines.append((h_arr[v], p_arr[v], Q))
     return lines
 
 
-def _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, n_lines=12, n_pts=200):
-    p_crit = _q("Pcrit","T",300,"Q",1)
-    T_crit = _q("Tcrit","T",300,"Q",1)
-    T_trip = _q("Ttriple","T",300,"Q",1)
-    p_trip = _q("P","T",T_trip*1.001,"Q",0)
+def _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_lines=12, n_pts=200):
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
+    p_trip = _q("P", "T", T_trip*1.001, "Q", 0, cycle_config=cycle_config)
     p_lo_est = max(p_trip*1.1 if np.isfinite(p_trip) else 1e3, 1e3)
     p_vals = np.geomspace(p_lo_est, p_crit*3.0, n_lines)
 
@@ -176,25 +210,25 @@ def _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, n_lines=12, n_pts=200):
     lines = []
     for p in p_vals:
         if p < p_crit:
-            T_sat = _q("T","P",p,"Q",0)
-            s_sat_l = _q("S","P",p,"Q",0)
-            s_sat_v = _q("S","P",p,"Q",1)
+            T_sat = _q("T", "P", p, "Q", 0, cycle_config=cycle_config)
+            s_sat_l = _q("S", "P", p, "Q", 0, cycle_config=cycle_config)
+            s_sat_v = _q("S", "P", p, "Q", 1, cycle_config=cycle_config)
             if not (np.isfinite(T_sat) and np.isfinite(s_sat_l) and np.isfinite(s_sat_v)):
                 continue
-            # Subcooled branch (T < T_sat), reversed so path runs T_sat → T_lo
+            # Subcooled branch (T < T_sat)
             T_liq = T_sweep[T_sweep < T_sat]
-            s_liq = np.array([_q("S","P",p,"T",T) for T in T_liq])
+            s_liq = np.array([_q("S", "P", p, "T", T, cycle_config=cycle_config) for T in T_liq])
             # Superheated branch (T > T_sat)
             T_vap = T_sweep[T_sweep > T_sat]
-            s_vap = np.array([_q("S","P",p,"T",T) for T in T_vap])
+            s_vap = np.array([_q("S", "P", p, "T", T, cycle_config=cycle_config) for T in T_vap])
             # Two-phase horizontal bridge at T_sat
             s_2ph = np.linspace(s_sat_l, s_sat_v, 20)
             T_2ph = np.full(20, T_sat)
-            # Stitch: subcooled (low→T_sat) → bridge → superheated (T_sat→high)
-            s_all = np.concatenate([s_liq[::-1], s_2ph, s_vap])
-            T_all = np.concatenate([T_liq[::-1], T_2ph, T_vap])
+            # Stitch in physical order to avoid artificial loops/crossings.
+            s_all = np.concatenate([s_liq, s_2ph, s_vap])
+            T_all = np.concatenate([T_liq, T_2ph, T_vap])
         else:
-            s_all = np.array([_q("S","P",p,"T",T) for T in T_sweep])
+            s_all = np.array([_q("S", "P", p, "T", T, cycle_config=cycle_config) for T in T_sweep])
             T_all = T_sweep
 
         v = (np.isfinite(s_all) & (s_all >= s_lo) & (s_all <= s_hi) &
@@ -204,22 +238,22 @@ def _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, n_lines=12, n_pts=200):
     return lines
 
 
-def _isenthalp_lines_ts(s_lo, s_hi, T_lo, T_hi, n_lines=18, n_pts=200):
+def _isenthalp_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_lines=18, n_pts=200):
     # Sample h range from corners of the visible TS window
     h_samples = []
     for s in np.linspace(s_lo, s_hi, 6):
         for T in np.linspace(T_lo, T_hi, 6):
-            h_samples.append(_q("H","T",T,"S",s))
+            h_samples.append(_q("H", "T", T, "S", s, cycle_config=cycle_config))
     h_samples = [h for h in h_samples if np.isfinite(h)]
     if not h_samples:
         return []
     h_vals  = np.linspace(min(h_samples)*0.95, max(h_samples)*1.05, n_lines)
-    p_crit  = _q("Pcrit","T",300,"Q",1)
+    p_crit  = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     p_arr   = np.geomspace(1e3, p_crit*5, n_pts)
     lines   = []
     for h in h_vals:
-        s_arr = np.array([_q("S","P",p,"H",h) for p in p_arr])
-        T_arr = np.array([_q("T","P",p,"H",h) for p in p_arr])
+        s_arr = np.array([_q("S", "P", p, "H", h, cycle_config=cycle_config) for p in p_arr])
+        T_arr = np.array([_q("T", "P", p, "H", h, cycle_config=cycle_config) for p in p_arr])
         v = (np.isfinite(s_arr) & np.isfinite(T_arr) &
              (s_arr >= s_lo) & (s_arr <= s_hi) &
              (T_arr >= T_lo*0.95) & (T_arr <= T_hi*1.05))
@@ -228,25 +262,25 @@ def _isenthalp_lines_ts(s_lo, s_hi, T_lo, T_hi, n_lines=18, n_pts=200):
     return lines
 
 
-def _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, n_lines=18, n_pts=200):
-    T_crit = _q("Tcrit","T",300,"Q",1)
-    T_trip = _q("Ttriple","T",300,"Q",1)
+def _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_lines=18, n_pts=200):
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_vals = np.linspace(T_trip*1.05, T_crit*1.5, n_lines)
     p_arr  = np.geomspace(max(p_lo*0.5, 1e3), p_hi*1.5, n_pts)
     lines  = []
     for T in T_vals:
         if T < T_crit:
-            p_sat = _q("P","T",T,"Q",0)
-            h_sat_l = _q("H","T",T,"Q",0)
-            h_sat_v = _q("H","T",T,"Q",1)
+            p_sat = _q("P", "T", T, "Q", 0, cycle_config=cycle_config)
+            h_sat_l = _q("H", "T", T, "Q", 0, cycle_config=cycle_config)
+            h_sat_v = _q("H", "T", T, "Q", 1, cycle_config=cycle_config)
             if not (np.isfinite(p_sat) and np.isfinite(h_sat_l) and np.isfinite(h_sat_v)):
                 continue
             # Liquid branch (p > p_sat)
             p_liq = p_arr[p_arr > p_sat]
-            h_liq = np.array([_q("H","P",p,"T",T) for p in p_liq])
+            h_liq = np.array([_q("H", "P", p, "T", T, cycle_config=cycle_config) for p in p_liq])
             # Vapour branch (p < p_sat)
             p_vap = p_arr[p_arr < p_sat]
-            h_vap = np.array([_q("H","P",p,"T",T) for p in p_vap])
+            h_vap = np.array([_q("H", "P", p, "T", T, cycle_config=cycle_config) for p in p_vap])
             # Two-phase horizontal bridge at p_sat
             h_2ph = np.linspace(h_sat_l, h_sat_v, 20)
             p_2ph = np.full(20, p_sat)
@@ -254,7 +288,7 @@ def _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, n_lines=18, n_pts=200):
             h_all = np.concatenate([h_liq[::-1], h_2ph, h_vap[::-1]])
             p_all = np.concatenate([p_liq[::-1], p_2ph, p_vap[::-1]])
         else:
-            h_all = np.array([_q("H","P",p,"T",T) for p in p_arr])
+            h_all = np.array([_q("H", "P", p, "T", T, cycle_config=cycle_config) for p in p_arr])
             p_all = p_arr
 
         v = (np.isfinite(h_all) &
@@ -265,11 +299,11 @@ def _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, n_lines=18, n_pts=200):
     return lines
 
 
-def _isentrop_lines_ph(h_lo, h_hi, p_lo, p_hi, n_lines=12, n_pts=200):
+def _isentrop_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_lines=12, n_pts=200):
     s_samples = []
     for h in np.linspace(h_lo, h_hi, 6):
         for p in np.geomspace(max(p_lo, 1e3), p_hi, 6):
-            s_samples.append(_q("S","P",p,"H",h))
+            s_samples.append(_q("S", "P", p, "H", h, cycle_config=cycle_config))
     s_samples = [s for s in s_samples if np.isfinite(s)]
     if not s_samples:
         return []
@@ -277,7 +311,7 @@ def _isentrop_lines_ph(h_lo, h_hi, p_lo, p_hi, n_lines=12, n_pts=200):
     p_arr  = np.geomspace(max(p_lo*0.5, 1e3), p_hi*1.5, n_pts)
     lines  = []
     for sv in s_vals:
-        h_arr = np.array([_q("H","P",p,"S",sv) for p in p_arr])
+        h_arr = np.array([_q("H", "P", p, "S", sv, cycle_config=cycle_config) for p in p_arr])
         v = (np.isfinite(h_arr) &
              (h_arr >= h_lo) & (h_arr <= h_hi) &
              (p_arr >= p_lo*0.9) & (p_arr <= p_hi*1.1))
@@ -384,7 +418,7 @@ def _draw_isolines_labeled(ax, lines, color, frac, fmt_short, fmt_named,
 
 # Expansion lines + legend
 # ========================
-def _add_expansion_lines(ax, state, diagram_type):
+def _add_expansion_lines(ax, state, diagram_type, cycle_config, include_verification=False):
     s     = state
     p_exp = np.linspace(s["p_ref_3"], s["p_ref_1"], 150)
     col   = "#02220E"
@@ -395,17 +429,17 @@ def _add_expansion_lines(ax, state, diagram_type):
         line_isenth, = ax.plot(h_isenth, p_exp, color=col, ls="-.", lw=1.5,
                             alpha=alp, zorder=4,
                             label=r"$\mathrm{Isenthalpic\ expansion}$")
-        h_isen = np.array([_q("H","P",p,"S",s["s_ref_3"]) for p in p_exp])
+        h_isen = np.array([_q("H", "P", p, "S", s["s_ref_3"], cycle_config=cycle_config) for p in p_exp])
         v = np.isfinite(h_isen)
         line_isen, = ax.plot(h_isen[v], p_exp[v], color=col, ls="--", lw=1.5,
                             alpha=alp, zorder=4,
                             label=r"$\mathrm{Isentropic\ expansion}$")
         # Horizontal connector from isentropic exit → actual cycle point 4
-        h_isen_exit = _q("H","P",s["p_ref_1"],"S",s["s_ref_3"])
+        h_isen_exit = _q("H", "P", s["p_ref_1"], "S", s["s_ref_3"], cycle_config=cycle_config)
         ax.plot([h_isen_exit, s["h_ref_4"]], [s["p_ref_1"], s["p_ref_1"]],
                 color=col, ls="--", lw=1.5, alpha=alp, zorder=4)
     else:
-        T_exit = _q("T","P",s["p_ref_1"],"S",s["s_ref_3"])
+        T_exit = _q("T", "P", s["p_ref_1"], "S", s["s_ref_3"], cycle_config=cycle_config)
         T_rng  = np.linspace(s["T_ref_3"], T_exit, 150)
         line_isen, = ax.plot(np.full_like(T_rng, s["s_ref_3"]), T_rng,
                              color=col, ls="--", lw=1.5, alpha=alp, zorder=4,
@@ -413,16 +447,24 @@ def _add_expansion_lines(ax, state, diagram_type):
         # Horizontal connector from isentropic exit → actual cycle point 4
         ax.plot([s["s_ref_3"], s["s_ref_4"]], [T_exit, T_exit],
                 color=col, ls="--", lw=1.5, alpha=alp, zorder=4)
-        s_is = np.array([_q("S","P",p,"H",s["h_ref_3"]) for p in p_exp])
-        T_is = np.array([_q("T","P",p,"H",s["h_ref_3"]) for p in p_exp])
+        s_is = np.array([_q("S", "P", p, "H", s["h_ref_3"], cycle_config=cycle_config) for p in p_exp])
+        T_is = np.array([_q("T", "P", p, "H", s["h_ref_3"], cycle_config=cycle_config) for p in p_exp])
         v = np.isfinite(s_is)
         line_isenth, = ax.plot(s_is[v], T_is[v], color=col, ls="-.", lw=1.5,
                                alpha=alp, zorder=4,
                                label=r"$\mathrm{Isenthalpic\ expansion}$")
 
-    line_turb = Line2D([0],[0], color='green', lw=1.5,
-                       label=r"$\mathrm{Turbine\ expansion}$")
-    leg = ax.legend(handles=[line_turb, line_isen, line_isenth],
+    line_turb_label = r"$\mathrm{HP\ cycle\ incl.\ turbine\ expansion}$"
+    line_turb = Line2D([0],[0], color='green', lw=1.5, label=line_turb_label)
+    handles = [line_turb, line_isen, line_isenth]
+    if include_verification:
+        line_verif = Line2D(
+            [0], [0], color=COL_VERIFICATION, lw=1.5,
+            label=r"$\mathrm{Verification\ cycle\ incl.\ isenthalpic\ expansion}$"
+        )
+        handles.append(line_verif)
+
+    leg = ax.legend(handles=handles,
                     loc="lower right", bbox_to_anchor=(0.9875, 0.015),
                     fontsize=8, framealpha=0.85)
     fr = leg.get_frame()
@@ -496,27 +538,29 @@ def _draw_perf_box(ax, perf):
 COL_QUALITY    = '#1a3a6b'   # dark blue
 COL_ISOBAR_ISO = '#6ab0de'   # light blue  (isobars on TS, isentropes on PH)
 COL_ISENTH_ISO = '#e07b20'   # orange      (isenthalps on TS, isotherms on PH)
+COL_VERIFICATION = '#0d1f3c' # very dark slate blue (for verification/reference cycles)
 
 
 
 # TS renderer
 # ===========
-def _make_plot_ts(state, perf, ts_data):
+def _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=None):
     warnings.filterwarnings("ignore")
+    refrigerant = cycle_config["refrigerant"]
     n_pts = 150 if resolution == "low" else 600
 
-    s_lo, s_hi, T_lo, T_hi = _cycle_bounds_ts(state)
+    s_lo, s_hi, T_lo, T_hi = _cycle_bounds_ts(state, cycle_config)
     fig, ax = plt.subplots(figsize=(10, 7))
     ax.set_xlim(s_lo, s_hi)
     ax.set_ylim(T_lo, T_hi)
 
     # Saturation dome
-    s_dome, T_dome = _saturation_dome_ts(n=n_pts*2)
+    s_dome, T_dome = _saturation_dome_ts(cycle_config, n=n_pts*2)
     ax.plot(s_dome, T_dome, color='black', lw=1.0, zorder=3)
 
     # Quality isolines — dark blue
     _draw_isolines_labeled(
-        ax, _quality_isolines_ts(T_lo, T_hi, n_pts=n_pts),
+        ax, _quality_isolines_ts(T_lo, T_hi, cycle_config, n_pts=n_pts),
         COL_QUALITY, 0.3,
         fmt_short=lambda v: rf"${v:.2f}$",
         fmt_named =lambda v: rf"$x={v:.2f}$",
@@ -524,21 +568,21 @@ def _make_plot_ts(state, perf, ts_data):
 
     # Isobar lines — light blue
     _draw_isolines_labeled(
-        ax, _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, n_pts=n_pts),
+        ax, _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_pts=n_pts),
         COL_ISOBAR_ISO, 0.85,
-        fmt_short=lambda v: rf"${v/1e6:.2f}$",
-        fmt_named =lambda v: rf"$p={v/1e6:.2f}\,\mathrm{{MPa}}$")
+        fmt_short=lambda v: rf"${v/1e3:.0f}$",
+        fmt_named =lambda v: rf"$p={v/1e3:.0f}\,\mathrm{{kPa}}$")
 
     # Isenthalpic lines — orange
     _draw_isolines_labeled(
-        ax, _isenthalp_lines_ts(s_lo, s_hi, T_lo, T_hi, n_pts=n_pts),
+        ax, _isenthalp_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_pts=n_pts),
         COL_ISENTH_ISO, 0.90,
         fmt_short=lambda v: rf"${v/1e3:.0f}$",
         fmt_named =lambda v: rf"$h={v/1e3:.0f}\,\mathrm{{kJ/kg}}$")
 
     # Critical isobar (dotted) — filter zeros / invalid T values
-    p_crit = _q("Pcrit","T",300,"Q",1)
-    T_crit = _q("Tcrit","T",300,"Q",1)
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     sc, Tc = isobar_segment(s_lo, s_hi, p_crit, cycle_config, general_config)
     sc = np.array(sc); Tc = np.array(Tc)
     valid = (Tc > T_lo) & (Tc <= T_hi * 1.05) & np.isfinite(Tc) & (Tc > 1.0)
@@ -546,7 +590,7 @@ def _make_plot_ts(state, perf, ts_data):
         ax.plot(sc[valid], Tc[valid], color='black', ls=':', lw=1.0, zorder=1)
 
     # Critical point
-    s_crit = _q("S","P",p_crit,"T",T_crit)
+    s_crit = _q("S", "P", p_crit, "T", T_crit, cycle_config=cycle_config)
     ax.plot(s_crit, T_crit, marker='o', markerfacecolor='yellow',
             markersize=5, markeredgecolor='black', zorder=9)
 
@@ -556,7 +600,32 @@ def _make_plot_ts(state, perf, ts_data):
     ax.plot(ts_data["minor"]["s"], ts_data["minor"]["T"],
             color='green', lw=1.5, zorder=7)
 
-    _add_expansion_lines(ax, state, "TS")
+    # Verification/reference cycle (if provided)
+    if verification_data is not None:
+        T_raw = np.array(verification_data[0, :], dtype=float)  # Row 0: temperature
+        s_raw = np.array(verification_data[3, :], dtype=float)  # Row 3: entropy
+        T_verif, _, _, s_verif = _verification_path_with_isenthalpic_expansion(
+            verification_data,
+            cycle_config,
+        )
+        # In his code, he does not account for the fact that if the compression ends in the two-phase regime, there is no reason
+        # to include the inflection point (for Q = 1) to the cycle, so I have to remove this point manually... 
+        # for the expansion he does account for this cuz it is typical that the expansion ends in the two-phase domain.
+        if np.isclose(T_verif[1], T_verif[2]) and s_verif[2] > s_verif[1]:
+            T_verif = np.delete(T_verif, 2)
+            s_verif = np.delete(s_verif, 2)
+            T_raw = np.delete(T_raw, 2)
+            s_raw = np.delete(s_raw, 2)
+        ax.plot(s_verif, T_verif, color=COL_VERIFICATION, lw=1.5, zorder=6, label='Reference (MTW)')
+        ax.scatter(s_raw, T_raw, color=COL_VERIFICATION, marker='o', s=5, zorder=6)
+
+    _add_expansion_lines(
+        ax,
+        state,
+        "TS",
+        cycle_config,
+        include_verification=(verification_data is not None),
+    )
 
     for flow, col in [(ts_data["coolant"],"blue"),(ts_data["heating"],"red")]:
         ax.plot(flow["s"], flow["T"], color=col, marker='o', markersize=2, zorder=12)
@@ -577,11 +646,12 @@ def _make_plot_ts(state, perf, ts_data):
 
 # PH renderer
 # ===========
-def _make_plot_ph(state, perf, ph_data):
+def _make_plot_ph(state, perf, ph_data, cycle_config, verification_data=None):
     warnings.filterwarnings("ignore")
+    refrigerant = cycle_config["refrigerant"]
     n_pts = 150 if resolution == "low" else 600
 
-    h_lo, h_hi, p_lo, p_hi = _cycle_bounds_ph(state)
+    h_lo, h_hi, p_lo, p_hi = _cycle_bounds_ph(state, cycle_config)
     p_lo = max(p_lo, 1e2)
 
     fig, ax = plt.subplots(figsize=(10, 7))
@@ -590,12 +660,12 @@ def _make_plot_ph(state, perf, ph_data):
     ax.set_ylim(p_lo, p_hi)
 
     # Saturation dome
-    h_dome, p_dome = _saturation_dome_ph(n=n_pts*2)
+    h_dome, p_dome = _saturation_dome_ph(cycle_config, n=n_pts*2)
     ax.plot(h_dome, p_dome, color='black', lw=1.0, zorder=3)
 
     # Quality isolines — dark blue
     _draw_isolines_labeled(
-        ax, _quality_isolines_ph(p_lo, p_hi, n_pts=n_pts),
+        ax, _quality_isolines_ph(p_lo, p_hi, cycle_config, n_pts=n_pts),
         COL_QUALITY, 0.5,
         fmt_short=lambda v: rf"${v:.2f}$",
         fmt_named =lambda v: rf"$x={v:.2f}$",
@@ -603,7 +673,7 @@ def _make_plot_ph(state, perf, ph_data):
 
     # Isotherm lines — orange
     _draw_isolines_labeled(
-        ax, _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, n_pts=n_pts),
+        ax, _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_pts=n_pts),
         COL_ISENTH_ISO, 0.88,
         fmt_short=lambda v: rf"${v:.0f}$",
         fmt_named =lambda v: rf"$T={v:.0f}\,\mathrm{{K}}$",
@@ -611,20 +681,20 @@ def _make_plot_ph(state, perf, ph_data):
 
     # Isentropic lines — light blue
     _draw_isolines_labeled(
-        ax, _isentrop_lines_ph(h_lo, h_hi, p_lo, p_hi, n_pts=n_pts),
+        ax, _isentrop_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_pts=n_pts),
         COL_ISOBAR_ISO, 0.88,
         fmt_short=lambda v: rf"${v/1e3:.2f}$",
         fmt_named =lambda v: rf"$s={v/1e3:.2f}\,\mathrm{{kJ/kgK}}$",
         yscale='log')
 
     # Critical point + critical isotherm (dotted)
-    p_crit = _q("Pcrit","T",300,"Q",1)
-    T_crit = _q("Tcrit","T",300,"Q",1)
-    h_crit = _q("H","P",p_crit,"T",T_crit)
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    h_crit = _q("H", "P", p_crit, "T", T_crit, cycle_config=cycle_config)
     ax.plot(h_crit, p_crit, marker='o', markerfacecolor='yellow',
             markersize=5, markeredgecolor='black', zorder=9)
     p_iso = np.geomspace(max(p_lo*0.5, 1e3), p_hi*1.1, 300)
-    h_Tc  = np.array([_q("H","P",p,"T",T_crit) for p in p_iso])
+    h_Tc  = np.array([_q("H", "P", p, "T", T_crit, cycle_config=cycle_config) for p in p_iso])
     v     = np.isfinite(h_Tc) & (h_Tc >= h_lo) & (h_Tc <= h_hi)
     if v.any():
         ax.plot(h_Tc[v], p_iso[v], color='black', ls=':', lw=1.0, zorder=1)
@@ -635,7 +705,29 @@ def _make_plot_ph(state, perf, ph_data):
     ax.plot(ph_data["minor"]["h"], ph_data["minor"]["p"],
             color='green', lw=1.5, zorder=7)
 
-    _add_expansion_lines(ax, state, "PH")
+    # Verification/reference cycle (if provided)
+    if verification_data is not None:
+        p_raw = np.array(verification_data[1, :], dtype=float)  # Row 1: pressure
+        h_raw = np.array(verification_data[2, :], dtype=float)  # Row 2: enthalpy
+        _, p_verif, h_verif, _ = _verification_path_with_isenthalpic_expansion(
+            verification_data,
+            cycle_config,
+        )
+        if np.isclose(p_verif[1], p_verif[2]) and h_verif[2] > h_verif[1]:
+            p_verif = np.delete(p_verif, 2)
+            h_verif = np.delete(h_verif, 2)
+            p_raw = np.delete(p_raw, 2)
+            h_raw = np.delete(h_raw, 2)
+        ax.plot(h_verif, p_verif, color=COL_VERIFICATION, lw=1.5, zorder=6, label='Reference (MTW)')
+        ax.scatter(h_raw, p_raw, color=COL_VERIFICATION, marker='o', s=5, zorder=6)
+
+    _add_expansion_lines(
+        ax,
+        state,
+        "PH",
+        cycle_config,
+        include_verification=(verification_data is not None),
+    )
 
     ax.set_xlabel(r"$h\ [\mathrm{kJ/kg}]$")
     ax.set_ylabel(r"$p\ [\mathrm{Pa}]$")
@@ -650,27 +742,40 @@ def _make_plot_ph(state, perf, ph_data):
 
 # Public entry point for TS or PH plotting
 # ========================================
-def make_thdy_plot(state, perf, diagram_type, ts_data=None, ph_data=None):
+def make_thdy_plot(
+    state,
+    perf,
+    diagram_type,
+    cycle_config,
+    output_dir,
+    ts_data=None,
+    ph_data=None,
+    verification_data=None,
+    verbose=True,
+):
+    refrigerant = cycle_config["refrigerant"]
     configure_matplotlib()
-    fig = _make_plot_ts(state, perf, ts_data) if diagram_type == "TS" \
-          else _make_plot_ph(state, perf, ph_data)
-    fname = f"Conceptual HP Cycle - {refrigerant} - {diagram_type}.pdf"
-    Path("./thermodynamic_diagrams").mkdir(parents=True, exist_ok=True)
-    Path("./thermodynamic_diagrams/" + f"{refrigerant}/").mkdir(parents=True, exist_ok=True)
-    fig.savefig("thermodynamic_diagrams/" + f"{refrigerant}/" + fname, dpi=1000, bbox_inches="tight")
-    logger.info(f"Saved: .\\thermodynamic_diagrams\\{fname}\n")
+    fig = _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=verification_data) if diagram_type == "TS" \
+          else _make_plot_ph(state, perf, ph_data, cycle_config, verification_data=verification_data)
+    output_root = Path(output_dir)
+    output_path = output_root / refrigerant / f"Conceptual HP Cycle - {refrigerant} - {diagram_type}.pdf"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=1000, bbox_inches="tight")
+    if verbose:
+        logger.info(f"Saved: {output_path}")
     return fig
 
 
 
 # Public entry point for COP_vs_eff_investigation
 # ===============================================
-def make_COP_vs_eff_plot(X, Y, Z):
+def make_COP_vs_eff_plot(X, Y, Z, cycle_config):
     """
     X, Y : 2D meshgrids (η_turb, η_compr)
     Z    : 2D COP values on the same grid
     """
     configure_matplotlib()      
+    refrigerant = cycle_config["refrigerant"]
     cop_type = "COP_turb"
     cop_type_latex = _cop_type_to_latex(cop_type)
 
