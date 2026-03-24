@@ -3,7 +3,7 @@ sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_
 sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/verification/')
 
 from thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
-from visualization import make_thdy_plot, make_COP_vs_eff_plot
+from visualization import make_thdy_plot, make_COP_vs_eff_plot, make_empty_thdy_plot
 from verification import verification
 from logger import setup_logger
 import warnings
@@ -20,7 +20,7 @@ logger = setup_logger()
 
 def main():
     # Perform code verification:
-    verification(verification_table=True, generate_thdy_diagrams=False)
+    verification(verification_table=False, generate_thdy_diagrams=False)
 
     analysis_type = general_config["analysis_type"]
     if general_config.get("ignore_coolprop_warnings", False):
@@ -56,7 +56,7 @@ def main():
             perf,
             diagram_type="TS",
             cycle_config=cycle_config,
-            output_dir="thermodynamic_diagrams",
+            output_dir="heat_pump_thermodynamic_diagrams",
             ts_data=build_ts_data(state, cycle_config, general_config),
         )
         logger.info("Rendering P-H diagram")
@@ -65,7 +65,7 @@ def main():
             perf,
             diagram_type="PH",
             cycle_config=cycle_config,
-            output_dir="thermodynamic_diagrams",
+            output_dir="heat_pump_thermodynamic_diagrams",
             ph_data=build_ph_data(state, cycle_config),
         )
         logger.info("Evaluation Completed")
@@ -83,7 +83,7 @@ def main():
         Z = np.full_like(X, np.nan)                   # COP_turb grid
         total_runs = n * n
         logger.info(f"Running {cop_sweep_key} vs efficiency sweep ({n}×{n} = {total_runs:,} configurations)")
-        for k in track(range(total_runs), description="\033[92mINFO\t"):
+        for k in track(range(total_runs), description="\033[92mINFO    "):
             i, j = divmod(k, n)
             cycle_config["η_turb"]  = X[i, j]
             cycle_config["η_compr"] = Y[i, j]
@@ -98,8 +98,29 @@ def main():
         logger.info("Sweep completed. Generating heatmap + 3D surface")
         make_COP_vs_eff_plot(X, Y, Z, cycle_config)  
         logger.info(f"{cop_sweep_key} vs efficiency investigation completed")
+    elif analysis_type == "substance_thermodynamic_diagrams":
+        substances = general_config.get("substances_to_plot", [cycle_config["refrigerant"]])
+        logger.info(f"Generating empty thermodynamic diagrams for {len(substances)} substance(s)")
+        for substance in substances:
+            cycle_config_substance = dict(cycle_config)
+            cycle_config_substance["refrigerant"] = substance
+            logger.info(f"Rendering empty TS/PH diagrams for {substance}")
+            make_empty_thdy_plot(
+                diagram_type="TS",
+                cycle_config=cycle_config_substance,
+                output_dir="substance_thermodynamic_diagrams",
+            )
+            make_empty_thdy_plot(
+                diagram_type="PH",
+                cycle_config=cycle_config_substance,
+                output_dir="substance_thermodynamic_diagrams",
+            )
+        logger.info("Substance thermodynamic diagram generation completed")
     else:
-        logger.error(f"Invalid analysis type: {analysis_type}. Please set to 'single_configuration' or 'COP_vs_eff_investigation'.")
+        logger.error(
+            f"Invalid analysis type: {analysis_type}. Please set to 'single_configuration', "
+            "'COP_vs_eff_investigation', or 'substance_thermodynamic_diagrams'."
+        )
 
 if __name__ == "__main__":
     main()

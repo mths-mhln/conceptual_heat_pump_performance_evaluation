@@ -55,7 +55,7 @@ def heat_from_isobar_path(T_start, T_end, p, general_config, cycle_config):
 
 # Cycle solver (bisection on pressure ratio)
 # ==========================================
-def solve_subcritical_cycle(cycle_config, general_config):
+def solve_cycle(cycle_config, general_config):
     # Extract parameters from cycle_config
     refrigerant = cycle_config["refrigerant"]
     T_h_in      = cycle_config["T_h_in"]

@@ -1,8 +1,9 @@
 # Analysis Type
 # =============
-analysis_type = "single_configuration"
+analysis_type = "single_configuration" 
 # single_configuration       | evaluates conceptual heat pump cycle according to specifications
 # COP_vs_eff_investigation   | evaluates COP variation for different values of turbine and compressor efficiencies
+# substance_thermodynamic_diagrams | generates empty TS/PH diagrams for selected substances
 
 
 # Cycle Specifications (thermodynamic inputs)
@@ -21,7 +22,8 @@ cp_h = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric press
 ΔT_pp_4 = 10                # [K] - pinch point 4
 ΔT_sh = 5                   # [K] - superheat
 ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
-refrigerant = "R1234ze(Z)"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)"
+refrigerant = "MM"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "CO2"
+substances_to_plot = ["R1234ze(Z)", "MM", "R1233zd(E)", "CO2"] # for "substance_thermodynamic_diagrams" analysis type
 
 cycle_config = {
     "T_c_in": T_c_in,
@@ -64,6 +66,13 @@ elif analysis_type == "COP_vs_eff_investigation":
         "analysis_type": analysis_type,
         "visualization_method": "CoolProp",
         "resolution": "low",                 # "low" or "high"
+        "ignore_coolprop_warnings": True
+    }
+elif analysis_type == "substance_thermodynamic_diagrams":
+    general_config = {
+        "analysis_type": analysis_type,
+        "visualization_method": "CoolProp",
+        "resolution": "low",                 # "low" or "high"
         "ignore_coolprop_warnings": True,
         "ts_margin_s_left": 0.2,
         "ts_margin_s_right": 0.2,
@@ -73,10 +82,11 @@ elif analysis_type == "COP_vs_eff_investigation":
         "ph_margin_h_right": 0.15,
         "ph_margin_p_bot": 0.1,
         "ph_margin_p_top": 0.2,
+        "substances_to_plot": substances_to_plot,
     }
 else:
     raise ValueError(
-        "Invalid analysis_type. Use 'single_configuration' or 'COP_vs_eff_investigation'."
+        "Invalid analysis_type. Use 'single_configuration', 'COP_vs_eff_investigation', or 'substance_thermodynamic_diagrams'."
     )
  
 

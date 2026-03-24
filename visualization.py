@@ -10,16 +10,6 @@ from pathlib import Path
 from config import general_config
 from thermodynamics import isobar_segment   # TS critical-isobar
 
-resolution = general_config["resolution"]
-ts_margin_s_left = general_config["ts_margin_s_left"]
-ts_margin_s_right = general_config["ts_margin_s_right"]
-ts_margin_T_bot = general_config["ts_margin_T_bot"]
-ts_margin_T_top = general_config["ts_margin_T_top"]
-ph_margin_h_left = general_config["ph_margin_h_left"]
-ph_margin_h_right = general_config["ph_margin_h_right"]
-ph_margin_p_bot = general_config["ph_margin_p_bot"]
-ph_margin_p_top = general_config["ph_margin_p_top"]
-
 logger = setup_logger()
 
 
@@ -94,6 +84,11 @@ def _verification_path_with_isenthalpic_expansion(verification_data, cycle_confi
 # Axis-bound calculation
 # ======================
 def _cycle_bounds_ts(state, cycle_config):
+    ts_margin_s_left = general_config.get("ts_margin_s_left", 0.2)
+    ts_margin_s_right = general_config.get("ts_margin_s_right", 0.2)
+    ts_margin_T_bot = general_config.get("ts_margin_T_bot", 0.2)
+    ts_margin_T_top = general_config.get("ts_margin_T_top", 0.15)
+
     s_vals = [state[k] for k in ("s_ref_1","s_ref_2","s_ref_3","s_ref_4")]
     T_vals = [state[k] for k in ("T_ref_1","T_ref_2","T_ref_3","T_ref_4")]
 
@@ -116,6 +111,11 @@ def _cycle_bounds_ts(state, cycle_config):
 
 
 def _cycle_bounds_ph(state, cycle_config):
+    ph_margin_h_left = general_config.get("ph_margin_h_left", 0.3)
+    ph_margin_h_right = general_config.get("ph_margin_h_right", 0.15)
+    ph_margin_p_bot = general_config.get("ph_margin_p_bot", 0.1)
+    ph_margin_p_top = general_config.get("ph_margin_p_top", 0.2)
+
     h_vals = [state[k] for k in ("h_ref_1","h_ref_2","h_ref_3","h_ref_4")]
     p_vals = [state[k] for k in ("p_ref_1","p_ref_2","p_ref_3","p_ref_4")]
 
@@ -547,6 +547,7 @@ COL_VERIFICATION = '#0d1f3c' # very dark slate blue (for verification/reference 
 def _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=None):
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
+    resolution = general_config.get("resolution", "low")
     n_pts = 150 if resolution == "low" else 600
 
     s_lo, s_hi, T_lo, T_hi = _cycle_bounds_ts(state, cycle_config)
@@ -649,6 +650,7 @@ def _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=None):
 def _make_plot_ph(state, perf, ph_data, cycle_config, verification_data=None):
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
+    resolution = general_config.get("resolution", "low")
     n_pts = 150 if resolution == "low" else 600
 
     h_lo, h_hi, p_lo, p_hi = _cycle_bounds_ph(state, cycle_config)
@@ -739,6 +741,152 @@ def _make_plot_ph(state, perf, ph_data, cycle_config, verification_data=None):
     return fig
 
 
+def _make_empty_plot_ts(cycle_config):
+    warnings.filterwarnings("ignore")
+    refrigerant = cycle_config["refrigerant"]
+    resolution = general_config.get("resolution", "low")
+    n_pts = 150 if resolution == "low" else 600
+
+    s_dome, T_dome = _saturation_dome_ts(cycle_config, n=n_pts*2)
+    valid_dome = np.isfinite(s_dome) & np.isfinite(T_dome)
+    s_dome = s_dome[valid_dome]
+    T_dome = T_dome[valid_dome]
+    if len(s_dome) < 5 or len(T_dome) < 5:
+        raise ValueError(f"Unable to build TS saturation dome for {refrigerant}.")
+
+    s_lo_raw = np.min(s_dome)
+    s_hi_raw = np.max(s_dome)
+    T_lo_raw = np.min(T_dome)
+    T_hi_raw = np.max(T_dome)
+    ds = max(s_hi_raw - s_lo_raw, 1e-6)
+    dT = max(T_hi_raw - T_lo_raw, 1e-6)
+
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+
+    # Expand the computational and visible domain beyond the saturation dome.
+    s_lo = s_lo_raw - 0.12 * ds
+    s_hi = s_hi_raw + 0.18 * ds
+    T_lo = T_lo_raw
+    T_hi = max(T_hi_raw + 0.11 * dT, T_crit * 1.175 if np.isfinite(T_crit) else T_hi_raw + 0.11 * dT)
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    ax.set_xlim(s_lo, s_hi)
+    ax.set_ylim(T_lo, T_hi)
+    ax.plot(s_dome, T_dome, color='black', lw=1.0, zorder=3)
+
+    _draw_isolines_labeled(
+        ax, _quality_isolines_ts(T_lo, T_hi, cycle_config, n_pts=n_pts),
+        COL_QUALITY, 0.3,
+        fmt_short=lambda v: rf"${v:.2f}$",
+        fmt_named =lambda v: rf"$x={v:.2f}$",
+        flip_q1=(refrigerant == "R1234ze(Z)"))
+
+    _draw_isolines_labeled(
+        ax, _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_pts=n_pts),
+        COL_ISOBAR_ISO, 0.85,
+        fmt_short=lambda v: rf"${v/1e3:.0f}$",
+        fmt_named =lambda v: rf"$p={v/1e3:.0f}\,\mathrm{{kPa}}$")
+
+    _draw_isolines_labeled(
+        ax, _isenthalp_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_pts=n_pts),
+        COL_ISENTH_ISO, 0.90,
+        fmt_short=lambda v: rf"${v/1e3:.0f}$",
+        fmt_named =lambda v: rf"$h={v/1e3:.0f}\,\mathrm{{kJ/kg}}$")
+
+    sc, Tc = isobar_segment(s_lo, s_hi, p_crit, cycle_config, general_config)
+    sc = np.array(sc); Tc = np.array(Tc)
+    valid = (Tc > T_lo) & (Tc <= T_hi * 1.05) & np.isfinite(Tc) & (Tc > 1.0)
+    if valid.any():
+        ax.plot(sc[valid], Tc[valid], color='black', ls=':', lw=1.0, zorder=1)
+
+    s_crit = _q("S", "P", p_crit, "T", T_crit, cycle_config=cycle_config)
+    if np.isfinite(s_crit) and np.isfinite(T_crit):
+        ax.plot(s_crit, T_crit, marker='o', markerfacecolor='yellow',
+                markersize=5, markeredgecolor='black', zorder=9)
+
+    ax.set_xlabel(r"$s\ [\mathrm{J/kg/K}]$")
+    ax.set_ylabel(r"$T\ [\mathrm{K}]$")
+    ax.set_title(rf"$\mathrm{{Thermodynamic\ Diagram\ (TS)}}\ -\ \mathrm{{{refrigerant}}}$")
+    fig.tight_layout()
+    return fig
+
+
+def _make_empty_plot_ph(cycle_config):
+    warnings.filterwarnings("ignore")
+    refrigerant = cycle_config["refrigerant"]
+    resolution = general_config.get("resolution", "low")
+    n_pts = 150 if resolution == "low" else 600
+
+    h_dome, p_dome = _saturation_dome_ph(cycle_config, n=n_pts*2)
+    valid_dome = np.isfinite(h_dome) & np.isfinite(p_dome)
+    h_dome = h_dome[valid_dome]
+    p_dome = p_dome[valid_dome]
+    if len(h_dome) < 5 or len(p_dome) < 5:
+        raise ValueError(f"Unable to build PH saturation dome for {refrigerant}.")
+
+    h_lo_raw = np.min(h_dome)
+    h_hi_raw = np.max(h_dome)
+    p_lo_raw = max(np.min(p_dome), 1e2)
+    p_hi_raw = np.max(p_dome)
+    dh = max(h_hi_raw - h_lo_raw, 1e-6)
+
+    p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+
+    # Expand the computational and visible domain beyond the saturation dome.
+    h_lo = h_lo_raw - 0.12 * dh
+    h_hi = h_hi_raw + 0.18 * dh
+    p_lo = p_lo_raw
+    p_hi = max(p_hi_raw * 1.6, p_crit * 1.4 if np.isfinite(p_crit) else p_hi_raw * 1.6)
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    ax.set_yscale('log')
+    ax.set_xlim(h_lo, h_hi)
+    ax.set_ylim(p_lo, p_hi)
+    ax.plot(h_dome, p_dome, color='black', lw=1.0, zorder=3)
+
+    _draw_isolines_labeled(
+        ax, _quality_isolines_ph(p_lo, p_hi, cycle_config, n_pts=n_pts),
+        COL_QUALITY, 0.5,
+        fmt_short=lambda v: rf"${v:.2f}$",
+        fmt_named =lambda v: rf"$x={v:.2f}$",
+        yscale='log')
+
+    _draw_isolines_labeled(
+        ax, _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_pts=n_pts),
+        COL_ISENTH_ISO, 0.88,
+        fmt_short=lambda v: rf"${v:.0f}$",
+        fmt_named =lambda v: rf"$T={v:.0f}\,\mathrm{{K}}$",
+        yscale='log')
+
+    _draw_isolines_labeled(
+        ax, _isentrop_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_pts=n_pts),
+        COL_ISOBAR_ISO, 0.88,
+        fmt_short=lambda v: rf"${v/1e3:.2f}$",
+        fmt_named =lambda v: rf"$s={v/1e3:.2f}\,\mathrm{{kJ/kgK}}$",
+        yscale='log')
+
+    T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
+    h_crit = _q("H", "P", p_crit, "T", T_crit, cycle_config=cycle_config)
+    if np.isfinite(h_crit) and np.isfinite(p_crit):
+        ax.plot(h_crit, p_crit, marker='o', markerfacecolor='yellow',
+                markersize=5, markeredgecolor='black', zorder=9)
+
+    p_iso = np.geomspace(max(p_lo * 0.5, 1e3), p_hi * 1.1, 300)
+    h_Tc = np.array([_q("H", "P", p, "T", T_crit, cycle_config=cycle_config) for p in p_iso])
+    v = np.isfinite(h_Tc) & (h_Tc >= h_lo) & (h_Tc <= h_hi)
+    if v.any():
+        ax.plot(h_Tc[v], p_iso[v], color='black', ls=':', lw=1.0, zorder=1)
+
+    ax.set_xlabel(r"$h\ [\mathrm{kJ/kg}]$")
+    ax.set_ylabel(r"$p\ [\mathrm{Pa}]$")
+    ax.xaxis.set_major_formatter(
+        ticker.FuncFormatter(lambda x, _: f"${x/1000:.0f}$"))
+    ax.set_title(rf"$\mathrm{{Thermodynamic\ Diagram\ (PH)}}\ -\ \mathrm{{{refrigerant}}}$")
+    fig.tight_layout()
+    return fig
+
+
 
 # Public entry point for TS or PH plotting
 # ========================================
@@ -766,6 +914,19 @@ def make_thdy_plot(
     return fig
 
 
+def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_thermodynamic_diagrams", verbose=True):
+    refrigerant = cycle_config["refrigerant"]
+    configure_matplotlib()
+    fig = _make_empty_plot_ts(cycle_config) if diagram_type == "TS" else _make_empty_plot_ph(cycle_config)
+    output_root = Path(output_dir)
+    output_path = output_root / refrigerant / f"Thermodynamic Diagram - {refrigerant} - {diagram_type}.pdf"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=1000, bbox_inches="tight")
+    if verbose:
+        logger.info(f"Saved: {output_path}")
+    return fig
+
+
 
 # Public entry point for COP_vs_eff_investigation
 # ===============================================
@@ -776,6 +937,8 @@ def make_COP_vs_eff_plot(X, Y, Z, cycle_config):
     """
     configure_matplotlib()      
     refrigerant = cycle_config["refrigerant"]
+    output_dir = Path("COP_investigations") / refrigerant
+    output_dir.mkdir(parents=True, exist_ok=True)
     cop_type = "COP_turb"
     cop_type_latex = _cop_type_to_latex(cop_type)
 
@@ -801,7 +964,7 @@ def make_COP_vs_eff_plot(X, Y, Z, cycle_config):
 
     # Save 
     fname2d = f"{cop_type}_vs_Efficiencies_{refrigerant}.pdf"
-    fig.savefig("COP_investigations/" + f"{refrigerant}/" + fname2d, dpi=1000, bbox_inches='tight')
+    fig.savefig(output_dir / fname2d, dpi=1000, bbox_inches='tight')
     logger.info(f"Saved: .\\COP_investigations\\{fname2d}")
     plt.close(fig)
 
@@ -820,8 +983,6 @@ def make_COP_vs_eff_plot(X, Y, Z, cycle_config):
     ax3d.set_title(rf'$\mathrm{{3D}}\ {cop_type_latex}\ (\mathrm{{{refrigerant}}})$')
 
     fname3d = f"{cop_type}_vs_Efficiencies_{refrigerant}_3D.pdf"
-    Path("./COP_investigations").mkdir(parents=True, exist_ok=True)
-    Path("./COP_investigations/" + f"{refrigerant}/").mkdir(parents=True, exist_ok=True)
-    fig3d.savefig("COP_investigations/" + f"{refrigerant}/" + fname3d, dpi=800, bbox_inches='tight')
+    fig3d.savefig(output_dir / fname3d, dpi=800, bbox_inches='tight')
     logger.info(f"Saved: .\\COP_investigations\\{fname3d}")
     plt.close(fig3d)
