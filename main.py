@@ -4,23 +4,27 @@ sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_
 
 from thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
 from visualization import make_thdy_plot, make_COP_vs_eff_plot, make_empty_thdy_plot
+from config import cycle_config, general_config
 from verification import verification
 from logger import setup_logger
-import warnings
 
 from rich.console import Console
 from rich.table import Table
 from rich.progress import track
+
 import numpy as np
-from config import cycle_config, general_config
+import warnings
+import timeit
 
 logger = setup_logger()
+start = timeit.default_timer()
 
 
 
-def main():
+def main(perform_verification=True):
     # Perform code verification:
-    verification(verification_table=False, generate_thdy_diagrams=False)
+    if perform_verification:
+        verification(verification_table=True, generate_thdy_diagrams=False)
 
     analysis_type = general_config["analysis_type"]
     if general_config.get("ignore_coolprop_warnings", False):
@@ -30,7 +34,7 @@ def main():
     if analysis_type == "single_configuration":
         logger.info("Evaluating conceptual heat pump cycle")
         state = solve_cycle(cycle_config, general_config)
-        perf = compute_performance(state, cycle_config)
+        perf = compute_performance(state, cycle_config, general_config)
         table = Table(title=f"Conceptual Heat Pump Cycle - {cycle_config['refrigerant']}", show_lines=False)
         table.add_column("Symbol", style="cyan", no_wrap=True)
         table.add_column("Value", justify="right")
@@ -123,6 +127,7 @@ def main():
         )
 
 if __name__ == "__main__":
-    main()
-
-    
+    main(perform_verification=True)
+    end = timeit.default_timer()
+    elapsed = end - start
+    logger.info(f"Total execution time: {elapsed:.2f} seconds")

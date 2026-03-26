@@ -8,7 +8,7 @@ from logger import setup_logger
 from pathlib import Path
 
 from config import general_config
-from thermodynamics import isobar_segment   # TS critical-isobar
+from thermodynamics import _isobar_segment   # TS critical-isobar
 
 logger = setup_logger()
 
@@ -16,7 +16,7 @@ logger = setup_logger()
 
 # Utility
 # =======
-def configure_matplotlib():
+def _configure_matplotlib():
     plt.rcParams.update({
         "text.usetex": True,
         "font.family": "serif",
@@ -584,7 +584,7 @@ def _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=None):
     # Critical isobar (dotted) — filter zeros / invalid T values
     p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
-    sc, Tc = isobar_segment(s_lo, s_hi, p_crit, cycle_config, general_config)
+    sc, Tc = _isobar_segment(s_lo, s_hi, p_crit, cycle_config, general_config)
     sc = np.array(sc); Tc = np.array(Tc)
     valid = (Tc > T_lo) & (Tc <= T_hi * 1.05) & np.isfinite(Tc) & (Tc > 1.0)
     if valid.any():
@@ -794,7 +794,7 @@ def _make_empty_plot_ts(cycle_config):
         fmt_short=lambda v: rf"${v/1e3:.0f}$",
         fmt_named =lambda v: rf"$h={v/1e3:.0f}\,\mathrm{{kJ/kg}}$")
 
-    sc, Tc = isobar_segment(s_lo, s_hi, p_crit, cycle_config, general_config)
+    sc, Tc = _isobar_segment(s_lo, s_hi, p_crit, cycle_config, general_config)
     sc = np.array(sc); Tc = np.array(Tc)
     valid = (Tc > T_lo) & (Tc <= T_hi * 1.05) & np.isfinite(Tc) & (Tc > 1.0)
     if valid.any():
@@ -902,7 +902,7 @@ def make_thdy_plot(
     verbose=True,
 ):
     refrigerant = cycle_config["refrigerant"]
-    configure_matplotlib()
+    _configure_matplotlib()
     fig = _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=verification_data) if diagram_type == "TS" \
           else _make_plot_ph(state, perf, ph_data, cycle_config, verification_data=verification_data)
     output_root = Path(output_dir)
@@ -916,7 +916,7 @@ def make_thdy_plot(
 
 def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_thermodynamic_diagrams", verbose=True):
     refrigerant = cycle_config["refrigerant"]
-    configure_matplotlib()
+    _configure_matplotlib()
     fig = _make_empty_plot_ts(cycle_config) if diagram_type == "TS" else _make_empty_plot_ph(cycle_config)
     output_root = Path(output_dir)
     output_path = output_root / refrigerant / f"Thermodynamic Diagram - {refrigerant} - {diagram_type}.pdf"
@@ -935,7 +935,7 @@ def make_COP_vs_eff_plot(X, Y, Z, cycle_config):
     X, Y : 2D meshgrids (η_turb, η_compr)
     Z    : 2D COP values on the same grid
     """
-    configure_matplotlib()      
+    _configure_matplotlib()      
     refrigerant = cycle_config["refrigerant"]
     output_dir = Path("COP_investigations") / refrigerant
     output_dir.mkdir(parents=True, exist_ok=True)

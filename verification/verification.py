@@ -52,10 +52,10 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
         table.add_column("Rel. Error", justify="right")
 
         overall_max_discrepancy = 0.0
-        for cycle_config in [cycle_config_R1233zd_E, cycle_config_n_pentane, cycle_config_MM]:
+        for cycle_config in [cycle_config_R1233zd_E, cycle_config_n_pentane, cycle_config_MM]:  
             logger.info(f"Evaluating conceptual heat pump cycle for refrigerant: {cycle_config['refrigerant']}")
             state = solve_cycle(cycle_config, general_config)
-            perf = compute_performance(state, cycle_config)
+            perf = compute_performance(state, cycle_config, general_config)
             max_discrepancy = _append_verification_rows(
                 table=table,
                 refrigerant=cycle_config["refrigerant"],
@@ -101,10 +101,10 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
         )
         if verification_table:
             console.print(table)
-            if overall_max_discrepancy < threshold:
-                logger.info(f"Verification successful: Overall max. discrepancy of {overall_max_discrepancy:.2%} is within the threshold of {threshold:.2%}.\n")
-            else:
-                logger.warning(f"Verification failed: Overall max. discrepancy of {overall_max_discrepancy:.2%} exceeds the threshold of {threshold:.2%}.\n")
+        if overall_max_discrepancy < threshold:
+            logger.info(f"Verification successful: Overall max. discrepancy of {overall_max_discrepancy:.2%} is within the threshold of {threshold:.2%}.\n")
+        else:
+            logger.warning(f"Verification failed: Overall max. discrepancy of {overall_max_discrepancy:.2%} exceeds the threshold of {threshold:.2%}.\n")
     else:
         logger.error(f"Invalid analysis type for verification: {analysis_type}. Please set to 'single_configuration'.")
 

@@ -6,25 +6,51 @@ analysis_type = "single_configuration"
 # substance_thermodynamic_diagrams | generates empty TS/PH diagrams for selected substances
 
 
+
+# refrigerant selection - depending on specification different specifications are necessary
+refrigerant = "CO2"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "CO2"
+
+
+
+# Substances to plot in "substance_thermodynamic_diagrams" analysis type
+substances_to_plot = ["R1234ze(Z)", "MM", "R1233zd(E)", "CO2"]
+
+
+
 # Cycle Specifications (thermodynamic inputs)
 # ===========================================
-T_c_in = 353.15             # [K] - 80 degC
-T_h_in = 287.15             # [K] - 15 degC (outside temp)
-ṁ_c = 42                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
-cp_c = 1885                 # [J/kg/K] - steam at 250 degrees
-ṁ_h = 40                    # [kg/s] - arbitrarily chosen
-cp_h = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
-η_turb = 0.87               # [-] - from turbine maps
-η_compr = 0.78              # [-] - from compressor maps
-ΔT_pp_1 = 10                # [K] - pinch point 1
-ΔT_pp_2 = 10                # [K] - pinch point 2
-ΔT_pp_3 = 10                # [K] - pinch point 3
-ΔT_pp_4 = 10                # [K] - pinch point 4
-ΔT_sh = 5                   # [K] - superheat
-ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
-refrigerant = "R1233zd(E)"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "CO2"
-substances_to_plot = ["R1234ze(Z)", "MM", "R1233zd(E)", "CO2"] # for "substance_thermodynamic_diagrams" analysis type
+if refrigerant != "CO2":
+    T_c_in = 353.15             # [K] - 80 degC
+    T_h_in = 287.15             # [K] - 15 degC (outside temp)
+    ṁ_c = 42                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
+    cp_c = 1885                 # [J/kg/K] - steam at 250 degrees
+    ṁ_h = 40                    # [kg/s] - arbitrarily chosen
+    cp_h = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
+    η_turb = 0.87               # [-] - from turbine maps
+    η_compr = 0.78              # [-] - from compressor maps
+    ΔT_pp_1 = 10                # [K] - pinch point 1
+    ΔT_pp_2 = 10                # [K] - pinch point 2
+    ΔT_pp_3 = 10                # [K] - pinch point 3
+    ΔT_pp_4 = 10                # [K] - pinch point 4
+    ΔT_sh = 5                   # [K] - superheat
+    ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
 
+if refrigerant == "CO2":
+    T_c_in = 286             # [K] - 80 degC  353.15
+    T_h_in = 240             # [K] - 15 degC (outside temp)
+    ṁ_c = 42                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
+    cp_c = 1885                 # [J/kg/K] - steam at 250 degrees
+    ṁ_h = 80                    # [kg/s] - arbitrarily chosen
+    cp_h = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
+    η_turb = 0.87               # [-] - from turbine maps
+    η_compr = 0.78              # [-] - from compressor maps
+    ΔT_pp_1 = 10                # [K] - pinch point 1
+    ΔT_pp_2 = 15                # [K] - pinch point 2
+    ΔT_pp_3 = 10                # [K] - pinch point 3
+    ΔT_pp_4 = 3                # [K] - pinch point 4
+    ΔT_sh = 5                   # [K] - superheat
+    ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
+    
 cycle_config = {
     "T_c_in": T_c_in,
     "T_h_in": T_h_in,
@@ -42,6 +68,7 @@ cycle_config = {
     "ɳ_shaft": ɳ_shaft,
     "refrigerant": refrigerant,
 }
+
 
 
 # General / runtime / plotting settings
