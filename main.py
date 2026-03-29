@@ -1,8 +1,9 @@
 import sys
 sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/')
 sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/verification/')
+sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/legacy/')
 
-from thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
+from thermodynamics_legacy import solve_cycle, compute_performance, build_ts_data, build_ph_data
 from visualization import make_thdy_plot, make_COP_vs_eff_plot, make_empty_thdy_plot
 from config import cycle_config, general_config
 from verification import verification

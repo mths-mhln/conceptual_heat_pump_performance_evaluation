@@ -67,7 +67,7 @@ def _specific_heat_from_isobar_path(
 
     if supercritical_cycle or uniform_sampling:
         # Derive enthalpy bounds from the temperature endpoints, then delegate to
-        # the enthalpy-based sampler.  The returned T_range is used directly for
+        # the enthalpy-based sampler. The returned T_range is used directly for
         # the cp integration so no extra PropsSI calls are needed here.
         h_start = PropsSI("H", "P", p, "T", T_start, f"REFPROP::{cycle_config['refrigerant']}")
         h_end   = PropsSI("H", "P", p, "T", T_end,   f"REFPROP::{cycle_config['refrigerant']}")
@@ -169,9 +169,120 @@ def _check_second_derivative_sign(s_arr, T_arr):
 
 
 
-# Cycle solver (bisection on pressure ratio)
-# ==========================================
+# Cycle solver
+# ============
 def solve_cycle(cycle_config, general_config):
+    if "PR" in cycle_config: # cycle fully specified by three pp and one PR
+        if not supercritical_cycle:
+            cycle_data = evaluate_subcritical_cycle_PR(cycle_config, general_config)
+        if supercritical_cycle:
+            cycle_data = evaluate_supercritical_cycle_PR(cycle_config, general_config)
+
+    if not "PR" in cycle_config: # cycle fully specified by pinch points (my preferred method)
+        # Extract parameters from cycle_config
+        refrigerant = cycle_config["refrigerant"]
+        T_h_in      = cycle_config["T_h_in"]
+        T_c_in      = cycle_config["T_c_in"]
+        η_compr     = cycle_config["η_compr"]
+        ΔT_pp_1     = cycle_config["ΔT_pp_1"]
+        ΔT_pp_3     = cycle_config["ΔT_pp_3"]
+        ΔT_pp_4     = cycle_config["ΔT_pp_4"]
+        ΔT_sh       = cycle_config["ΔT_sh"]
+
+        # Station 1 — compressor inlet (fixed by user inputs)
+        T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+        p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+        p_ref_1 = p_ev
+
+        # Pressure ratio bisection bounds
+        p_lim_lower = p_ref_1 + 1 # semi arbitrary, but not equal to p_ref_1 as that may give issues
+        PR_bisection_range = [p_lim_lower / p_ref_1, 30] # arbitrary upper bound, I have yet to see compressors achieving such numbers, but I am inexperienced so who knows...
+
+        # initialize variables. 
+        ΔT_pp_4_calculated = 0
+        p_ref_2_conv = 0
+
+        while not math.isclose(ΔT_pp_4_calculated, ΔT_pp_4, rel_tol=1e-3):
+            # initiate PR_guess
+            PR_guess = sum(PR_bisection_range) / 2
+
+            # Station 1 - compressor inlet
+            T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+            p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+            p_ref_1 = p_ev
+            T_ref_1 = T_h_in - ΔT_pp_1
+            h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+            s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+
+            # Station 2 - condenser inlet
+            p_ref_2 = PR_guess * p_ref_1
+            h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+            h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
+            Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+            s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+
+            # Station 3 - turbine inlet
+            T_ref_3 = T_c_in + ΔT_pp_3
+            p_ref_3 = p_ref_2
+            s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+
+            # check if cycle converged without achieving the specifications
+            if math.isclose(p_ref_2, p_ref_2_conv, rel_tol=1e-6):
+                logger.critical("Convergence stagnated for PR bisection. Reason to believe heat pump cycle for specifications is impossible without"
+                    "the cycle occurring fully on the right side of the critical point (the typical result for if convergence is achieved without the specifications having been achieved).")
+                sys.exit()
+            p_ref_2_conv = p_ref_2
+
+            # Determine if the current PR_guess leads to a supercritical cycle.
+            if p_ref_2 > PropsSI("Pcrit", f"REFPROP::{refrigerant}"):
+                supercritical_cycle = True
+            else:
+                supercritical_cycle = False
+
+            # impossible cycle check
+            if Q_ref_2 < 0:
+                s_arr, T_arr = _isobar_segment(s_ref_3, s_ref_2, p_ref_2, cycle_config, general_config)
+                sign = _check_second_derivative_sign(s_arr, T_arr)
+                if sign >= 0:
+                    logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is non-negative."
+                        "Adjusting pressure ratio bounds for bisection.")
+                    # Rationale behind the return statement: see annotations.md statement 1.
+                    PR_bisection_range[1] = PR_guess
+                    continue
+                else:
+                    # dry-wet compression without being supercritical, however evaluation of condensing path can be 
+                    # evaluated in a similar manner as to the supercritical cycle. Saves some complexity in the code logic.
+                    supercritical_cycle = True
+
+            # Separate logic based on of the cycle. Putting this is a single function made it hard to interpret.        
+            if not supercritical_cycle:
+                cycle_metadata, cycle_data = evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess)
+            if supercritical_cycle:
+                cycle_metadata, cycle_data = evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess)
+
+            # If any of the triggers for an impossible cycle under the constraints are hit, continue based on the appropriate bisection update. 
+            if cycle_metadata["continue"] == True:
+                if cycle_metadata["bisection_update_bound"] == "upper":
+                    PR_bisection_range[1] = PR_guess
+                    continue
+                elif cycle_metadata["bisection_update_bound"] == "lower":
+                    PR_bisection_range[0] = PR_guess
+                    continue
+            
+            # If none of the triggers are hit, extract the obtained cycle characteristics.
+            if cycle_metadata["bisection_update_bound"] == "upper":
+                PR_bisection_range[1] = PR_guess
+            elif cycle_metadata["bisection_update_bound"] == "lower":
+                PR_bisection_range[0] = PR_guess
+
+    return cycle_data
+
+        
+        
+def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
+    """
+    evaluates the subcritical thermodynamic cycle which is fully constrained by the pinch point specifications. 
+    """
     # Extract parameters from cycle_config
     refrigerant = cycle_config["refrigerant"]
     T_h_in      = cycle_config["T_h_in"]
@@ -188,291 +299,123 @@ def solve_cycle(cycle_config, general_config):
     ΔT_pp_4     = cycle_config["ΔT_pp_4"]
     ΔT_sh       = cycle_config["ΔT_sh"]
 
+    # specify cycle nature, necessary for some calculations
+    supercritical_cycle = False
+
     # Station 1 — compressor inlet (fixed by user inputs)
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
     p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
+    
+    # Station 1
+    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ref_1 = p_ev
+    T_ref_1 = T_h_in - ΔT_pp_1
+    h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
 
-    # Pressure ratio bounds
-    p_lim_lower = p_ref_1 + 1
-    PR_bisection_range = [p_lim_lower / p_ref_1, 30]
-    PR_guess = sum(PR_bisection_range) / 2
+    # Station 2 — condenser inlet
+    p_ref_2 = PR_guess * p_ref_1
+    h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+    h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
+    T_ref_2 = PropsSI("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+    s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
-    ΔT_pp_4_calculated = 0
-    p_ref_2_conv = 0
-    state = {}
+    # Station 3 — turbine inlet
+    T_ref_3 = T_c_in + ΔT_pp_3
+    p_ref_3 = p_ref_2
+    h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    Q_ref_3 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
+    T_cond = PropsSI("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
 
-    while not math.isclose(ΔT_pp_4_calculated, ΔT_pp_4, rel_tol=1e-3):
-        # Station 1
-        T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-        p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
-        p_ref_1 = p_ev
-        T_ref_1 = T_h_in - ΔT_pp_1
-        h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-        s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-        Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
+    # Impossible cycle check
+    if T_ref_2 < T_ref_3 * 0.99:
+        logger.info(f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3 "
+            f"temperature (T_ref_3 = {T_ref_3:.2f} K). Adjusting pressure ratio bounds for bisection.")
+        # Rationale behind the return statement: see annotations.md statement 2.
+        cycle_metadata = {"continue": True, "bisection_update_bound": "lower"}
+        cycle_data = None
+        return cycle_metadata, cycle_data
 
-        # Station 2 — condenser inlet
-        p_ref_2 = PR_guess * p_ref_1
-        h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
-        h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
-        T_ref_2 = PropsSI("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
-        Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
-        s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    # Impossible cycle check
+    if Q_ref_3 == 1:
+        logger.info("Station 3 is saturated vapour. Adjusting pressure ratio bounds for bisection.")
+        # Rationale behind the return statement: see annotations.md statement 3.
+        cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
+        cycle_data = None
+        return cycle_metadata, cycle_data
 
-        if math.isclose(p_ref_2, p_ref_2_conv, rel_tol=1e-6):
-            logger.info(
-                "Convergence stagnated for ΔT_pp_4_calculated. Reason to believe heat pump cycle for specifications is impossible without"
-                "the cycle occurring fully on the right side of the critical point."
-            )
-            sys.exit()
-        p_ref_2_conv = p_ref_2
+    # Sample isobar between station 3 and 2 using enthalpy as independent variable.
+    s_ref_arr, T_ref_arr, _ = _sample_isobar_ts_uniform_arc(h_ref_3, h_ref_2, p_ref_2, cycle_config, num_points=150)
 
-        if p_ref_2 > PropsSI("Pcrit", f"REFPROP::{refrigerant}"):
-            supercritical_cycle = True
-        else:
-            supercritical_cycle = False
+    # impossible cycle check
+    sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
+    if sign > 0:
+        logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
+            "Adjusting pressure ratio bounds for bisection.")
+        # Rationale behind the return statement: see annotations.md statement 4.
+        cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
+        cycle_data = None
+        return cycle_metadata, cycle_data
 
-        # Station 3 — turbine inlet
-        T_ref_3 = T_c_in + ΔT_pp_3
-        p_ref_3 = p_ref_2
-        h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-        s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-        Q_ref_3 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
-        if not supercritical_cycle:
-            T_cond = PropsSI("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
+    # Station 4 — evaporator inlet
+    p_ref_4 = p_ref_1
+    h_ref_4_is = PropsSI("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
+    h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
+    T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    Q_ref_4 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
+    Q_ref_4_isenth = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
+    s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
 
-        if T_ref_2 < T_ref_3 * 0.99:
-            logger.info(
-                f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3 "
-                f"temperature (T_ref_3 = {T_ref_3:.2f} K). Adjusting pressure ratio bounds for bisection."
-            )
-            ΔT_pp_4_calculated = np.inf
-            if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
-                PR_bisection_range[1] = PR_guess
-            else:
-                PR_bisection_range[0] = PR_guess
-            PR_guess = sum(PR_bisection_range) / 2
-            continue
+    # Latent heats
+    Δh_cond = (PropsSI("H", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}") -
+                PropsSI("H", "P", p_ref_2, "Q", 0, f"REFPROP::{refrigerant}"))
+    Δh_ev = (PropsSI("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
+                PropsSI("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
+    
+    #Pinch-point 2 heat balance → ṁ_ref For non-supercritical cycle, one can assume that the superheating near ref_2 has a slope large enough for this method to make sense
+    T_c_pp_2 = T_cond - ΔT_pp_2
+    ṁ_ref = ((T_c_pp_2 - T_c_in) * ṁ_c * cp_c /
+            (Δh_cond * (Q_ref_2 - Q_ref_3) + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config)))
 
-        if Q_ref_3 == 1:
-            logger.info(
-                "Station 3 is saturated vapour. Adjusting pressure ratio bounds for bisection."
-            )
-            if supercritical_cycle:
-                ΔT_pp_4_calculated = -np.inf
-            if not supercritical_cycle:
-                ΔT_pp_4_calculated = np.inf
-            if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
-                PR_bisection_range[1] = PR_guess
-            else:
-                PR_bisection_range[0] = PR_guess
-            PR_guess = sum(PR_bisection_range) / 2
-            continue
+    # Outlet temperatures
+    T_c_out = T_c_in + (
+        _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+        + (Q_ref_2 - Q_ref_3) * Δh_cond * ṁ_ref
+        + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+    ) / (ṁ_c * cp_c)
 
-        # Sample isobar between station 3 and 2 using enthalpy as independent variable.
-        s_ref_arr, T_ref_arr, _ = _sample_isobar_ts_uniform_arc(
-            h_ref_3,
-            h_ref_2,
-            p_ref_2,
-            cycle_config,
-            num_points=150,
-        )
-        sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
-        if sign > 0:
-            logger.info(
-                "Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
-                "Adjusting pressure ratio bounds for bisection."
-            )
-            ΔT_pp_4_calculated = -np.inf
-            if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
-                PR_bisection_range[1] = PR_guess
-            else:
-                PR_bisection_range[0] = PR_guess
-            PR_guess = sum(PR_bisection_range) / 2
-            continue
+    T_h_out = T_h_in - (
+        _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+        + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
+        + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+    ) / (ṁ_h * cp_h)
 
-        # Station 4 — evaporator inlet
-        p_ref_4 = p_ref_1
-        h_ref_4_is = PropsSI("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
-        h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
-        T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
-        Q_ref_4 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
-        Q_ref_4_isenth = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
-        s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    T_h_pp_4 = _specific_heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref/ (ṁ_h * cp_h) + T_h_out
+    ΔT_pp_4_calculated = T_h_pp_4 - T_ev
 
-        if Q_ref_2 < 0:
-            s_arr, T_arr = _isobar_segment(s_ref_3, s_ref_2, p_ref_2, cycle_config, general_config)
-            sign = _check_second_derivative_sign(s_arr, T_arr)
-            if sign >= 0:
-                logger.info(
-                    "Second derivative d²T/ds² along the isobar between station 3 and 2 is non-negative. "
-                    "Adjusting pressure ratio bounds for bisection."
-                )
-                ΔT_pp_4_calculated = -np.inf
-                if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
-                    PR_bisection_range[1] = PR_guess
-                else:
-                    PR_bisection_range[0] = PR_guess
-                PR_guess = sum(PR_bisection_range) / 2
-                continue
-            else:
-                supercritical_cycle = True
-
-        # Latent heats
-        if not supercritical_cycle:
-            Δh_cond = (PropsSI("H", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}") -
-                       PropsSI("H", "P", p_ref_2, "Q", 0, f"REFPROP::{refrigerant}"))
-        Δh_ev = (PropsSI("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
-                 PropsSI("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
-
-        if supercritical_cycle:
-            ṁ_ref_bisection_range = [1e-5, 100]
-            ṁ_ref_guess = sum(ṁ_ref_bisection_range) / 2
-            ṁ_ref_conv = 0
-            ΔT_pp_2_calculated = 0
-            stagnation = False
-            while not math.isclose(ΔT_pp_2_calculated, ΔT_pp_2, rel_tol=1e-6):
-                if math.isclose(ṁ_ref_guess, ṁ_ref_conv, rel_tol=1e-8):
-                    logger.info(
-                        "Convergence stagnated for ΔT_pp_2_calculated. "
-                        "Increasing PR to push for a viable supercritical isobar."
-                    )
-                    stagnation = True
-                    break
-                ṁ_ref_conv = ṁ_ref_guess
-
-                # Sample isobar between station 3 and 2 using enthalpy as independent variable.
-                s_ref_arr, T_ref_arr, h_ref_arr = _sample_isobar_ts_uniform_arc(
-                    h_ref_3,
-                    h_ref_2,
-                    p_ref_2,
-                    cycle_config,
-                    num_points=80,
-                )
-                T_c_arr = np.zeros_like(T_ref_arr)
-                for i, (T_ref, s_ref, h_ref) in enumerate(zip(T_ref_arr, s_ref_arr, h_ref_arr)):
-                    heat_transferred = 0
-                    Q_ref = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref, f"REFPROP::{refrigerant}"))
-                    if not supercritical_cycle:
-                        if Q_ref < 0:
-                            heat_transferred += _specific_heat_from_isobar_path(T_ref_3, T_ref, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref_guess
-                        if Q_ref > 0 and Q_ref < 1:
-                            Δh = PropsSI("H", "P", p_ref_2, "Q", Q_ref, f"REFPROP::{refrigerant}") - PropsSI("H", "P", p_ref_2, "Q", 0, f"REFPROP::{refrigerant}")
-                            heat_transferred += Δh * ṁ_ref_guess
-                        if Q_ref > 1:
-                            heat_transferred += _specific_heat_from_isobar_path(T_ref, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref_guess
-                    if supercritical_cycle:
-                        # Use the enthalpy difference directly — more accurate than cp·ΔT integration
-                        # in the supercritical region where cp peaks sharply near the pseudocritical point.
-                        heat_transferred += (h_ref - h_ref_3) * ṁ_ref_guess
-                    T_c_arr[i] = T_c_in + heat_transferred / (ṁ_c * cp_c)
-                T_diff_arr = T_ref_arr - T_c_arr
-                negative_slope_points = np.where(np.diff(T_diff_arr) < 0)[0]
-                if len(negative_slope_points) == 0:
-                    logger.info(
-                        f"No negative slope points found for ṁ_ref_guess = {ṁ_ref_guess:.6f} kg/s. "
-                        "Adjusting mass flow rate bounds for bisection."
-                    )
-                    ΔT_pp_2_calculated = np.inf
-                    if (ΔT_pp_2_calculated - ΔT_pp_2) < 0:
-                        ṁ_ref_bisection_range[1] = ṁ_ref_guess
-                    else:
-                        ṁ_ref_bisection_range[0] = ṁ_ref_guess
-                    ṁ_ref_guess = sum(ṁ_ref_bisection_range) / 2
-                    continue
-
-                closest_point_index = negative_slope_points[np.argmin(T_diff_arr[negative_slope_points])]
-                T_c_pp_2_calculated = T_c_arr[closest_point_index]
-                ΔT_pp_2_calculated = T_ref_arr[closest_point_index] - T_c_pp_2_calculated
-
-                if ΔT_pp_2_calculated < ΔT_pp_2:
-                    ṁ_ref_bisection_range[1] = ṁ_ref_guess
-                else:
-                    ṁ_ref_bisection_range[0] = ṁ_ref_guess
-                ṁ_ref_guess = sum(ṁ_ref_bisection_range) / 2
-            ṁ_ref = ṁ_ref_guess
-            T_c_pp_2 = T_c_pp_2_calculated
-            if stagnation:
-                logger.info(
-                    "Stagnation occurred during pinch point 2 mass flow rate bisection. "
-                    "Adjusting pressure ratio bounds for bisection."
-                )
-                ΔT_pp_4_calculated = np.inf
-                if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
-                    PR_bisection_range[1] = PR_guess
-                else:
-                    PR_bisection_range[0] = PR_guess
-                PR_guess = sum(PR_bisection_range) / 2
-                continue
-
-        if not supercritical_cycle:
-            T_c_pp_2 = T_cond - ΔT_pp_2
-            ṁ_ref = ((T_c_pp_2 - T_c_in) * ṁ_c * cp_c /
-                    (Δh_cond * (Q_ref_2 - Q_ref_3) + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle)))
-
-        # Outlet temperatures
-        if supercritical_cycle:
-            T_c_out = T_c_in + _specific_heat_from_isobar_path(T_ref_3, T_ref_2, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
-        if not supercritical_cycle:
-            T_c_out = T_c_in + (
-                _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
-                + (Q_ref_2 - Q_ref_3) * Δh_cond * ṁ_ref
-                + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
-            ) / (ṁ_c * cp_c)
-
-        T_h_out = T_h_in - (
-            _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
-            + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
-            + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
-        ) / (ṁ_h * cp_h)
-
-        T_h_pp_4 = _specific_heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) / (ṁ_h * cp_h) + T_h_out
-        ΔT_pp_4_calculated = T_h_pp_4 - T_ev
-        if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
-            PR_bisection_range[1] = PR_guess
-        else:
-            PR_bisection_range[0] = PR_guess
-        PR_guess = sum(PR_bisection_range) / 2
-
-    # Cache converged state
-    if supercritical_cycle:
-        state = dict(
-            p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
-            p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
-            p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
-            p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
-            T_ev=T_ev, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
-            Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
-        )
-    if not supercritical_cycle:
-        state = dict(
-            p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
-            p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
-            p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
-            p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
-            T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
-            Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
-        )
-    return state
-
-
-
-
-
-def evaluate_subcrtical_cycle_pp(cycle_config, general_config, PR_guess):
-    """
-    evaluates the subcritical thermodynamic cycle which is fully constrained by the pinch point specifications. 
-    """
-
-
-
-
-
-
-
-
-
+    # store the thermodynamic cycle state in a dict
+    state = dict(
+        p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
+        p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
+        p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
+        p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
+        T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
+        Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
+    )
+    # Rationale behind the return statement: see annotations.md statement 7.
+    if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
+        cycle_metadata = {"continue": False, "bisection_update_bound": "upper"}
+        cycle_data = state
+        return cycle_metadata, cycle_data
+    else:
+        cycle_metadata = {"continue": False, "bisection_update_bound": "lower"}
+        cycle_data = state
+        return cycle_metadata, cycle_data  
 
 
 
@@ -480,8 +423,315 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
     """
     evaluates the supercritical thermodynamic cycle which is fully constrained by the pinch point specifications. 
     """
+    # Extract parameters from cycle_config
+    refrigerant = cycle_config["refrigerant"]
+    T_h_in      = cycle_config["T_h_in"]
+    T_c_in      = cycle_config["T_c_in"]
+    ṁ_h         = cycle_config["ṁ_h"]
+    ṁ_c         = cycle_config["ṁ_c"]
+    cp_h        = cycle_config["cp_h"]
+    cp_c        = cycle_config["cp_c"]
+    η_compr     = cycle_config["η_compr"]
+    η_turb      = cycle_config["η_turb"]
+    ΔT_pp_1     = cycle_config["ΔT_pp_1"]
+    ΔT_pp_2     = cycle_config["ΔT_pp_2"]
+    ΔT_pp_3     = cycle_config["ΔT_pp_3"]
+    ΔT_pp_4     = cycle_config["ΔT_pp_4"]
+    ΔT_sh       = cycle_config["ΔT_sh"]
+
+    # specify cycle nature, necessary for the final dict
+    supercritical_cycle = True
+
+    # Station 1 — compressor inlet (fixed by user inputs)
+    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ref_1 = p_ev
+
+    # Station 1
+    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ref_1 = p_ev
+    T_ref_1 = T_h_in - ΔT_pp_1
+    h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
+
+    # Station 2 — condenser inlet
+    p_ref_2 = PR_guess * p_ref_1
+    h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+    h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
+    T_ref_2 = PropsSI("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+    s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+
+    # Station 3 — turbine inlet
+    T_ref_3 = T_c_in + ΔT_pp_3
+    p_ref_3 = p_ref_2
+    h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    Q_ref_3 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
+    
+    # Impossible cycle check
+    if T_ref_2 < T_ref_3 * 0.99:
+        logger.info(f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3 "
+            f"temperature (T_ref_3 = {T_ref_3:.2f} K). Adjusting pressure ratio bounds for bisection.")
+        # Rationale behind the return statement: see annotations.md statement 2.
+        cycle_metadata = {"continue": True, "bisection_update_bound": "lower"}
+        cycle_data = None
+        return cycle_metadata, cycle_data
+
+    # Impossible cycle check
+    if Q_ref_3 == 1:
+        logger.info("Station 3 is saturated vapour. Adjusting pressure ratio bounds for bisection.")
+        # Rationale behind the return statement: see annotations.md statement 3.
+        cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
+        cycle_data = None
+        return cycle_metadata, cycle_data
+
+    # Sample isobar between station 3 and 2 using enthalpy as independent variable.
+    s_ref_arr, T_ref_arr, _ = _sample_isobar_ts_uniform_arc(h_ref_3, h_ref_2, p_ref_2, cycle_config, num_points=150)
+
+    # impossible cycle check
+    sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
+    if sign > 0:
+        logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
+            "Adjusting pressure ratio bounds for bisection.")
+        # Rationale behind the return statement: see annotations.md statement 4.
+        cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
+        cycle_data = None
+        return cycle_metadata, cycle_data
+    
+    # Station 4 — evaporator inlet
+    p_ref_4 = p_ref_1
+    h_ref_4_is = PropsSI("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
+    h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
+    T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    Q_ref_4 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
+    Q_ref_4_isenth = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
+    s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+
+    # Latent heats, only Δh_ev since supercritical cycle, no condensation occurs
+    Δh_ev   = (PropsSI("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
+                PropsSI("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
+
+    # Pinch-point 2 heat balance → ṁ_ref. See annotation.md statement 8.            
+    ṁ_ref_bisection_range = [1e-5, 100]  # kg/s [lower_bound, upper_bound] for mass flow rate through the cycle
+    ṁ_ref_conv = 0
+    ΔT_pp_2_calculated = 0
+    stagnation = False
+    while not math.isclose(ΔT_pp_2_calculated, ΔT_pp_2, rel_tol=1e-6):
+        ṁ_ref_guess = sum(ṁ_ref_bisection_range) / 2
+        if math.isclose(ṁ_ref_guess, ṁ_ref_conv, rel_tol=1e-8):
+            logger.info("Convergence stagnated for ΔT_pp_2_calculated. Reason to believe the pp requirement is not possible for the current isobar. " \
+            "We would like to have a supercritical cycle, increasing PR")
+            stagnation = True
+            break
+        ṁ_ref_conv = ṁ_ref_guess
+        # Arc-length TS resampling on the p_ref_2 isobar gives more uniform
+        # point distribution than plain uniform T sampling, while remaining
+        # robust near p_ref_2 ~ p_crit.
+        s_ref_arr, T_ref_arr = _sample_isobar_ts_uniform_arc(
+            T_ref_3,
+            T_ref_2,
+            p_ref_2,
+            cycle_config,
+            num_points=80,
+        )
+        T_c_arr = np.zeros_like(T_ref_arr)
+        for i, (T_ref, s_ref) in enumerate(zip(T_ref_arr, s_ref_arr)):
+            heat_transferred = 0
+            Q_ref = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "S", s_ref, f"REFPROP::{refrigerant}"))
+            heat_transferred += _specific_heat_from_isobar_path(T_ref_3, T_ref, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref_guess
+            T_c_arr[i] = T_c_in + heat_transferred / (ṁ_c * cp_c)
+        T_diff_arr = T_ref_arr - T_c_arr
+        negative_slope_points = np.where(np.diff(T_diff_arr) < 0)[0]
+        # Rationale behind the if statement: see annotations.md statement 5.
+        if len(negative_slope_points) == 0:
+            logger.warning(f"No negative slope points found for ṁ_ref_guess = {ṁ_ref_guess:.6f} kg/s. This indicates that the mass flow rate guess is too low to achieve the required ΔT_pp_2." \
+                            "Adjusting mass flow rate bounds for bisection.") 
+            ṁ_ref_bisection_range[0] = ṁ_ref_guess
+            continue
+        closest_point_index = negative_slope_points[np.argmin(T_diff_arr[negative_slope_points])]
+        T_c_pp_2_calculated = T_c_arr[closest_point_index]
+        ΔT_pp_2_calculated = T_ref_arr[closest_point_index] - T_c_pp_2_calculated
+        logger.info(f"ṁ_ref_guess: {ṁ_ref_guess:.6f} kg/s, ΔT_pp_2_calculated: {ΔT_pp_2_calculated:.4f} K, supercritical_cycle: {supercritical_cycle}")
+        if ΔT_pp_2_calculated < ΔT_pp_2:
+            ṁ_ref_bisection_range[1] = ṁ_ref_guess
+        else:                
+            ṁ_ref_bisection_range[0] = ṁ_ref_guess
+        ṁ_ref_guess = sum(ṁ_ref_bisection_range) / 2
+    
+    # Extract converged values
+    ṁ_ref = ṁ_ref_guess
+    T_c_pp_2 = T_c_pp_2_calculated
+
+    # If refrigerant fluid mass flow rate iteration stagnated, it is likely that the pinch point requirements are not achievable for the current isobar, 
+    # which may be due to the cycle being supercritical with a pressure ratio that is too low. In this case, we break out of the mass flow rate bisection 
+    # loop and continue with adjusting the pressure ratio bounds for bisection.
+    if stagnation:
+        logger.warning("Stagnation occurred during pinch point 2 mass flow rate bisection. This likely indicates that the pinch point requirements " \
+        "are not achievable for the current isobar, which may be due to the cycle being supercritical with a pressure ratio that is too low. " \
+        "Adjusting pressure ratio bounds for bisection.")
+        # Rationale behind the return statement: see annotations.md statement 6.
+        cycle_metadata = {"continue": True, "bisection_update_bound": "lower"}
+        cycle_data = None
+        return cycle_metadata, cycle_data
+
+    # Outlet temperatures
+    T_c_out = T_c_in + _specific_heat_from_isobar_path(T_ref_3, T_ref_2, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
+    T_h_out = T_h_in - (
+        _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+        + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
+        + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+    ) / (ṁ_h * cp_h)
+
+    # evaluate heating stream at pinch point 4
+    T_h_pp_4 = _specific_heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_h * cp_h) + T_h_out
+    ΔT_pp_4_calculated = T_h_pp_4 - T_ev
+
+    # store the thermodynamic cycle state in a dict
+    state = dict(
+        p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
+        p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
+        p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
+        p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
+        T_ev=T_ev, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out, 
+        Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2 = T_c_pp_2
+    )
+    # Rationale behind the return statement: see annotations.md statement 7.
+    if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
+        cycle_metadata = {"continue": False, "bisection_update_bound": "upper"}
+        cycle_data = state
+        return cycle_metadata, cycle_data
+    else:
+        cycle_metadata = {"continue": False, "bisection_update_bound": "lower"}
+        cycle_data = state
+        return cycle_metadata, cycle_data
 
 
+
+def evaluate_subcritical_cycle_PR(cycle_config, general_config):
+    """
+    evaluates the supercritical thermodynamic cycle which is fully constrained by the three pp and a pressure ratio specification. 
+    """
+    # Extract parameters from cycle_config
+    refrigerant = cycle_config["refrigerant"]
+    T_h_in      = cycle_config["T_h_in"]
+    T_c_in      = cycle_config["T_c_in"]
+    ṁ_h         = cycle_config["ṁ_h"]
+    ṁ_c         = cycle_config["ṁ_c"]
+    cp_h        = cycle_config["cp_h"]
+    cp_c        = cycle_config["cp_c"]
+    η_compr     = cycle_config["η_compr"]
+    η_turb      = cycle_config["η_turb"]
+    ΔT_pp_1     = cycle_config["ΔT_pp_1"]
+    ΔT_pp_3     = cycle_config["ΔT_pp_3"]
+    ΔT_pp_4     = cycle_config["ΔT_pp_4"]
+    ΔT_sh       = cycle_config["ΔT_sh"]
+    PR          = cycle_config["PR"]
+
+    # specify cycle nature, necessary for some calculations
+    supercritical_cycle = False
+
+    # Station 1 — compressor inlet (fixed by user inputs)
+    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ref_1 = p_ev
+    
+    # Station 1
+    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ref_1 = p_ev
+    T_ref_1 = T_h_in - ΔT_pp_1
+    h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
+
+    # Station 2 — condenser inlet
+    p_ref_2 = PR * p_ref_1
+    h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+    h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
+    T_ref_2 = PropsSI("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+    s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+
+    # Station 3 — turbine inlet
+    T_ref_3 = T_c_in + ΔT_pp_3
+    p_ref_3 = p_ref_2
+    h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    Q_ref_3 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
+    T_cond = PropsSI("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
+
+    # Impossible cycle check
+    if T_ref_2 < T_ref_3 * 0.99:
+        logger.critical("T_ref_2 < T_ref_3. Heat pump cycle for specifications is impossible.")
+        sys.exit()
+
+    # Impossible cycle check
+    if Q_ref_3 == 1:
+        logger.critical(" Q_ref_3 = 1. Heat pump cycle for specifications is impossible without"
+            "the cycle occurring fully on the right side of the critical point.")
+        sys.exit()
+
+    # Sample isobar between station 3 and 2 using enthalpy as independent variable.
+    s_ref_arr, T_ref_arr, _ = _sample_isobar_ts_uniform_arc(h_ref_3, h_ref_2, p_ref_2, cycle_config, num_points=150)
+
+    # impossible cycle check
+    sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
+    if sign > 0:
+        logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
+            "Adjusting pressure ratio bounds for bisection.")
+        # Rationale behind the return statement: see annotations.md statement 4.
+        cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
+        cycle_data = None
+        return cycle_metadata, cycle_data
+
+    # Station 4 — evaporator inlet
+    p_ref_4 = p_ref_1
+    h_ref_4_is = PropsSI("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
+    h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
+    T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    Q_ref_4 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
+    Q_ref_4_isenth = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
+    s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+
+    # Latent heats
+    Δh_cond = (PropsSI("H", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}") -
+                PropsSI("H", "P", p_ref_2, "Q", 0, f"REFPROP::{refrigerant}"))
+    Δh_ev = (PropsSI("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
+                PropsSI("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
+    
+    # Pinch point 4 heat balance → ṁ_ref. For non-supercritical cycle, one can assume that the subcooling near ref_4 has a slope large enough for this method to make sense
+    T_h_pp_4 = T_ev + ΔT_pp_4
+    ṁ_ref = ((T_h_in - T_h_pp_4) * ṁ_h * cp_h /
+            (Δh_ev * (Q_ref_1 - Q_ref_4) + _specific_heat_from_isobar_path(T_ev, T_ref_1, p_ref_1, general_config, cycle_config)))
+
+    # Outlet temperatures
+    T_c_out = T_c_in + (
+        _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+        + (Q_ref_2 - Q_ref_3) * Δh_cond * ṁ_ref
+        + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+    ) / (ṁ_c * cp_c)
+    T_h_out = T_h_in - (
+        _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+        + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
+        + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+    ) / (ṁ_h * cp_h)
+
+    # compute T_c_pp_2, necessary for plotting of the coolant flow on the T-s diagram. 
+    T_c_pp_2 = T_c_out - _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
+
+    # store the thermodynamic cycle state in a dict
+    state = dict(
+        p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
+        p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
+        p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
+        p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
+        T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
+        Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
+    )
+    return state
 
 
 
@@ -489,14 +739,120 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config):
     """
     evaluates the supercritical thermodynamic cycle which is fully constrained by the three pp and a pressure ratio specification. 
     """
+    # Extract parameters from cycle_config
+    refrigerant = cycle_config["refrigerant"]
+    T_h_in      = cycle_config["T_h_in"]
+    T_c_in      = cycle_config["T_c_in"]
+    ṁ_h         = cycle_config["ṁ_h"]
+    ṁ_c         = cycle_config["ṁ_c"]
+    cp_h        = cycle_config["cp_h"]
+    cp_c        = cycle_config["cp_c"]
+    η_compr     = cycle_config["η_compr"]
+    η_turb      = cycle_config["η_turb"]
+    ΔT_pp_1     = cycle_config["ΔT_pp_1"]
+    ΔT_pp_3     = cycle_config["ΔT_pp_3"]
+    ΔT_pp_4     = cycle_config["ΔT_pp_4"]
+    ΔT_sh       = cycle_config["ΔT_sh"]
+    PR          = cycle_config["PR"]
 
+    # specify cycle nature, necessary for some calculations
+    supercritical_cycle = False
 
+    # Station 1 — compressor inlet (fixed by user inputs)
+    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ref_1 = p_ev
+    
+    # Station 1
+    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ref_1 = p_ev
+    T_ref_1 = T_h_in - ΔT_pp_1
+    h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
 
+    # Station 2 — condenser inlet
+    p_ref_2 = PR * p_ref_1
+    h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+    h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
+    T_ref_2 = PropsSI("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+    s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
+    # Station 3 — turbine inlet
+    T_ref_3 = T_c_in + ΔT_pp_3
+    p_ref_3 = p_ref_2
+    h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    Q_ref_3 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
+    T_cond = PropsSI("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
 
+    # Impossible cycle check
+    if T_ref_2 < T_ref_3 * 0.99:
+        logger.critical("T_ref_2 < T_ref_3. Heat pump cycle for specifications is impossible.")
+        sys.exit()
 
+    # Impossible cycle check
+    if Q_ref_3 == 1:
+        logger.critical(" Q_ref_3 = 1. Heat pump cycle for specifications is impossible without"
+            "the cycle occurring fully on the right side of the critical point.")
+        sys.exit()
 
+    # Sample isobar between station 3 and 2 using enthalpy as independent variable.
+    s_ref_arr, T_ref_arr, _ = _sample_isobar_ts_uniform_arc(h_ref_3, h_ref_2, p_ref_2, cycle_config, num_points=150)
 
+    # impossible cycle check
+    sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
+    if sign > 0:
+        logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
+            "Adjusting pressure ratio bounds for bisection.")
+        # Rationale behind the return statement: see annotations.md statement 4.
+        cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
+        cycle_data = None
+        return cycle_metadata, cycle_data
+
+    # Station 4 — evaporator inlet
+    p_ref_4 = p_ref_1
+    h_ref_4_is = PropsSI("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
+    h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
+    T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    Q_ref_4 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
+    Q_ref_4_isenth = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
+    s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+
+    # Latent heats
+    Δh_ev = (PropsSI("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
+             PropsSI("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
+    
+    # Pinch point 4 heat balance → ṁ_ref. For non-supercritical cycle, one can assume that the subcooling near ref_4 has a slope large enough for this method to make sense
+    T_h_pp_4 = T_ev + ΔT_pp_4
+    ṁ_ref = ((T_h_in - T_h_pp_4) * ṁ_h * cp_h /
+            (Δh_ev * (Q_ref_1 - Q_ref_4) + _specific_heat_from_isobar_path(T_ev, T_ref_1, p_ref_1, general_config, cycle_config)))
+
+    # Outlet temperatures
+    T_c_out = T_c_in + (
+        + _specific_heat_from_isobar_path(T_ref_3, T_ref_2, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+    ) / (ṁ_c * cp_c)
+    T_h_out = T_h_in - (
+        _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+        + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
+        + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
+    ) / (ṁ_h * cp_h)
+
+    # compute T_c_pp_2, necessary for plotting of the coolant flow on the T-s diagram. 
+    T_c_pp_2 = T_c_out - _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
+
+    # store the thermodynamic cycle state in a dict
+    state = dict(
+        p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
+        p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
+        p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
+        p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
+        T_ev=T_ev, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
+        Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
+    )
+    return state
 
 
 

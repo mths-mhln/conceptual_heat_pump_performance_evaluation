@@ -50,6 +50,7 @@ if refrigerant == "CO2":
     ΔT_pp_4 = 3                # [K] - pinch point 4
     ΔT_sh = 5                   # [K] - superheat
     ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
+    print("co2")
     
 cycle_config = {
     "T_c_in": T_c_in,
