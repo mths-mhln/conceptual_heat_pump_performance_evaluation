@@ -67,7 +67,7 @@ def _specific_heat_from_isobar_path(
 
     if supercritical_cycle or uniform_sampling:
         # Derive enthalpy bounds from the temperature endpoints, then delegate to
-        # the enthalpy-based sampler. The returned T_range is used directly for
+        # the enthalpy-based sampler.  The returned T_range is used directly for
         # the cp integration so no extra PropsSI calls are needed here.
         h_start = PropsSI("H", "P", p, "T", T_start, f"REFPROP::{cycle_config['refrigerant']}")
         h_end   = PropsSI("H", "P", p, "T", T_end,   f"REFPROP::{cycle_config['refrigerant']}")
@@ -275,6 +275,9 @@ def solve_cycle(cycle_config, general_config):
             elif cycle_metadata["bisection_update_bound"] == "lower":
                 PR_bisection_range[0] = PR_guess
 
+            # Extract the ΔT_pp_4_calculated for evaluating the while loop condition.
+            ΔT_pp_4_calculated = cycle_data["ΔT_pp_4_calculated"]
+
     return cycle_data
 
         
@@ -345,7 +348,7 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
     if Q_ref_3 == 1:
         logger.info("Station 3 is saturated vapour. Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 3.
-        cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
+        cycle_metadata = {"continue": True, "bisection_update_bound": "lower"}
         cycle_data = None
         return cycle_metadata, cycle_data
 
@@ -405,7 +408,8 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
         p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
         T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
-        Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
+        Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle,
+        ΔT_pp_4_calculated=ΔT_pp_4_calculated
     )
     # Rationale behind the return statement: see annotations.md statement 7.
     if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
@@ -415,7 +419,7 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
     else:
         cycle_metadata = {"continue": False, "bisection_update_bound": "lower"}
         cycle_data = state
-        return cycle_metadata, cycle_data  
+        return cycle_metadata, cycle_data
 
 
 
@@ -516,6 +520,7 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
 
     # Pinch-point 2 heat balance → ṁ_ref. See annotation.md statement 8.            
     ṁ_ref_bisection_range = [1e-5, 100]  # kg/s [lower_bound, upper_bound] for mass flow rate through the cycle
+    ṁ_ref_guess = sum(ṁ_ref_bisection_range) / 2
     ṁ_ref_conv = 0
     ΔT_pp_2_calculated = 0
     stagnation = False
@@ -527,39 +532,35 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
             stagnation = True
             break
         ṁ_ref_conv = ṁ_ref_guess
-        # Arc-length TS resampling on the p_ref_2 isobar gives more uniform
-        # point distribution than plain uniform T sampling, while remaining
-        # robust near p_ref_2 ~ p_crit.
-        s_ref_arr, T_ref_arr = _sample_isobar_ts_uniform_arc(
-            T_ref_3,
-            T_ref_2,
+        # Sample isobar between station 3 and 2 using enthalpy as independent variable.
+        s_ref_arr, T_ref_arr, h_ref_arr = _sample_isobar_ts_uniform_arc(
+            h_ref_3,
+            h_ref_2,
             p_ref_2,
             cycle_config,
             num_points=80,
         )
         T_c_arr = np.zeros_like(T_ref_arr)
-        for i, (T_ref, s_ref) in enumerate(zip(T_ref_arr, s_ref_arr)):
+        for i, (T_ref, s_ref, h_ref) in enumerate(zip(T_ref_arr, s_ref_arr, h_ref_arr)):
             heat_transferred = 0
-            Q_ref = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "S", s_ref, f"REFPROP::{refrigerant}"))
-            heat_transferred += _specific_heat_from_isobar_path(T_ref_3, T_ref, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref_guess
+            Q_ref = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref, f"REFPROP::{refrigerant}"))
+            heat_transferred += (h_ref - h_ref_3) * ṁ_ref_guess
             T_c_arr[i] = T_c_in + heat_transferred / (ṁ_c * cp_c)
         T_diff_arr = T_ref_arr - T_c_arr
         negative_slope_points = np.where(np.diff(T_diff_arr) < 0)[0]
         # Rationale behind the if statement: see annotations.md statement 5.
         if len(negative_slope_points) == 0:
-            logger.warning(f"No negative slope points found for ṁ_ref_guess = {ṁ_ref_guess:.6f} kg/s. This indicates that the mass flow rate guess is too low to achieve the required ΔT_pp_2." \
+            logger.info(f"No negative slope points found for ṁ_ref_guess = {ṁ_ref_guess:.6f} kg/s. This indicates that the mass flow rate guess is too low to achieve the required ΔT_pp_2." \
                             "Adjusting mass flow rate bounds for bisection.") 
             ṁ_ref_bisection_range[0] = ṁ_ref_guess
             continue
         closest_point_index = negative_slope_points[np.argmin(T_diff_arr[negative_slope_points])]
         T_c_pp_2_calculated = T_c_arr[closest_point_index]
         ΔT_pp_2_calculated = T_ref_arr[closest_point_index] - T_c_pp_2_calculated
-        logger.info(f"ṁ_ref_guess: {ṁ_ref_guess:.6f} kg/s, ΔT_pp_2_calculated: {ΔT_pp_2_calculated:.4f} K, supercritical_cycle: {supercritical_cycle}")
         if ΔT_pp_2_calculated < ΔT_pp_2:
             ṁ_ref_bisection_range[1] = ṁ_ref_guess
         else:                
             ṁ_ref_bisection_range[0] = ṁ_ref_guess
-        ṁ_ref_guess = sum(ṁ_ref_bisection_range) / 2
     
     # Extract converged values
     ṁ_ref = ṁ_ref_guess
@@ -569,7 +570,7 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
     # which may be due to the cycle being supercritical with a pressure ratio that is too low. In this case, we break out of the mass flow rate bisection 
     # loop and continue with adjusting the pressure ratio bounds for bisection.
     if stagnation:
-        logger.warning("Stagnation occurred during pinch point 2 mass flow rate bisection. This likely indicates that the pinch point requirements " \
+        logger.info("Stagnation occurred during pinch point 2 mass flow rate bisection. This likely indicates that the pinch point requirements " \
         "are not achievable for the current isobar, which may be due to the cycle being supercritical with a pressure ratio that is too low. " \
         "Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 6.
@@ -596,7 +597,8 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
         p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
         T_ev=T_ev, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out, 
-        Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2 = T_c_pp_2
+        Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2 = T_c_pp_2, supercritical_cycle=supercritical_cycle, 
+        ΔT_pp_4_calculated=ΔT_pp_4_calculated
     )
     # Rationale behind the return statement: see annotations.md statement 7.
     if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:

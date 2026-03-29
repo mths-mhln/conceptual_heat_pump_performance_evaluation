@@ -277,10 +277,6 @@ def solve_cycle(cycle_config, general_config):
             cycle_config,
             num_points=80,
         )
-        print(T_ref_arr)
-        print(s_ref_arr)
-        print(f"Station 3: T_ref_3 = {T_ref_3:.2f} K, Q_ref_3 = {Q_ref_3:.4f}, s_ref_3 = {s_ref_3:.4f}")
-        print(f"Station 2: T_ref_2 = {T_ref_2:.2f} K, Q_ref_2 = {Q_ref_2:.4f}, s_ref_2 = {s_ref_2:.4f}")
         sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
         if sign > 0:
             logger.warning(f"Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. This indicates that there is only one pinch point along this path, which is an unusual cycle configuration and may indicate that the pressure ratio guess is too low. Adjusting pressure ratio bounds for bisection.")
