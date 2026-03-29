@@ -337,7 +337,7 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
 
     # Impossible cycle check
     if T_ref_2 < T_ref_3 * 0.99:
-        logger.info(f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3 "
+        logger.info(f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3"
             f"temperature (T_ref_3 = {T_ref_3:.2f} K). Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 2.
         cycle_metadata = {"continue": True, "bisection_update_bound": "lower"}
