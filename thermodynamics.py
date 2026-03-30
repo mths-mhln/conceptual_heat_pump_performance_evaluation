@@ -618,7 +618,8 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess, verb
                 _cp_props("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
 
     # Pinch-point 2 heat balance → ṁ_ref. See annotation.md statement 8.            
-    ṁ_ref_bisection_range = [1e-5, 100]  # kg/s [lower_bound, upper_bound] for mass flow rate through the cycle
+    ṁ_ref_bisection_range = [1e-2, 50]  # kg/s [lower_bound, upper_bound] 
+    # upper bound inspired by [P]_optimal_cycle_and_turbine_design_for_MW_scale_waste_heat_recovery_orc_with_partial_evaporation where up to 50 is shown.
     ṁ_ref_guess = sum(ṁ_ref_bisection_range) / 2
     ṁ_ref_conv = 0
     ΔT_pp_2_calculated = 0

@@ -1,6 +1,6 @@
 # Analysis Type
 # =============
-analysis_type = "COP_vs_eff_investigation"  # "single_configuration", "COP_vs_eff_investigation", or "substance_thermodynamic_diagrams"
+analysis_type = "single_configuration"  # "single_configuration", "COP_vs_eff_investigation", or "substance_thermodynamic_diagrams"
 # single_configuration       | evaluates conceptual heat pump cycle according to specifications
 # COP_vs_eff_investigation   | evaluates COP variation for different values of turbine and compressor efficiencies
 # substance_thermodynamic_diagrams | generates empty TS/PH diagrams for selected substances
@@ -8,7 +8,7 @@ analysis_type = "COP_vs_eff_investigation"  # "single_configuration", "COP_vs_ef
 
 
 # refrigerant selection - depending on specification different specifications are necessary
-refrigerant = "CO2"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "CO2"
+refrigerant = "R1234ze(Z)"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "CO2"
 
 
 
