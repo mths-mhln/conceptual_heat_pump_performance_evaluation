@@ -92,8 +92,8 @@ def main(perform_verification=True):
             cycle_config["η_turb"]  = X[i, j]
             cycle_config["η_compr"] = Y[i, j]
             try:
-                state = solve_cycle(cycle_config)
-                perf  = compute_performance(state, cycle_config)
+                state = solve_cycle(cycle_config, general_config)
+                perf  = compute_performance(state, cycle_config, general_config)
                 Z[i, j] = perf[cop_sweep_key]          # realistic COP with turbine work recovery
             except Exception as e:
                 if not general_config.get("ignore_coolprop_warnings", False):

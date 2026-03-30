@@ -5,11 +5,99 @@ sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_
 import math
 import itertools
 import numpy as np
-from CoolProp.CoolProp import PropsSI
-from logger import setup_logger
-import matplotlib.pyplot as plt
+import CoolProp.CoolProp as CP
 
+from logger import setup_logger
 logger = setup_logger()
+
+
+_ABSTRACT_STATES = {}
+
+
+def _parse_backend_fluid(fluid_spec):
+    if "::" in fluid_spec:
+        backend, fluid = fluid_spec.split("::", 1)
+        return backend, fluid
+    return "REFPROP", fluid_spec
+
+
+def _get_abstract_state(fluid_spec):
+    backend, fluid = _parse_backend_fluid(fluid_spec)
+    key = (backend, fluid)
+    if key not in _ABSTRACT_STATES:
+        _ABSTRACT_STATES[key] = CP.AbstractState(backend, fluid)
+    return _ABSTRACT_STATES[key]
+
+
+def _update_state_from_pair(state, in1, val1, in2, val2):
+    pair = (in1, in2)
+    if pair == ("P", "T"):
+        state.update(CP.PT_INPUTS, val1, val2)
+    elif pair == ("T", "P"):
+        state.update(CP.PT_INPUTS, val2, val1)
+    elif pair == ("P", "Q"):
+        state.update(CP.PQ_INPUTS, val1, val2)
+    elif pair == ("Q", "P"):
+        state.update(CP.PQ_INPUTS, val2, val1)
+    elif pair == ("T", "Q"):
+        state.update(CP.QT_INPUTS, val2, val1)
+    elif pair == ("Q", "T"):
+        state.update(CP.QT_INPUTS, val1, val2)
+    elif pair == ("P", "H"):
+        state.update(CP.HmassP_INPUTS, val2, val1)
+    elif pair == ("H", "P"):
+        state.update(CP.HmassP_INPUTS, val1, val2)
+    elif pair == ("P", "S"):
+        state.update(CP.PSmass_INPUTS, val1, val2)
+    elif pair == ("S", "P"):
+        state.update(CP.PSmass_INPUTS, val2, val1)
+    else:
+        raise NotImplementedError(f"Unsupported input pair for AbstractState: {pair}")
+
+
+def _cp_props(*args):
+    """AbstractState-backed PropsSI replacement for this module.
+
+    Supports the signatures used in this file:
+    - _cp_props(output, fluid)
+    - _cp_props(output, in1, val1, in2, val2, fluid)
+    """
+    try:
+        if len(args) == 2:
+            output, fluid = args
+            state = _get_abstract_state(fluid)
+            if output == "Pcrit":
+                return state.p_critical()
+            # Fallback to CoolProp's functional API for uncommon two-arg outputs.
+            return CP.PropsSI(output, fluid)
+
+        if len(args) == 6:
+            output, in1, val1, in2, val2, fluid = args
+            state = _get_abstract_state(fluid)
+            _update_state_from_pair(state, in1, val1, in2, val2)
+
+            if output == "T":
+                return state.T()
+            if output == "P":
+                return state.p()
+            if output == "H":
+                return state.hmass()
+            if output == "S":
+                return state.smass()
+            if output == "Q":
+                return state.Q()
+            if output == "C":
+                return state.cpmass()
+            if output == "Pcrit":
+                return state.p_critical()
+
+            # Fallback for outputs not explicitly mapped above.
+            return CP.PropsSI(output, in1, val1, in2, val2, fluid)
+
+        raise TypeError("PropsSI wrapper received unsupported signature")
+    except RuntimeError as err:
+        # Keep calling code behavior compatible with existing ValueError handlers.
+        raise ValueError(str(err)) from err
 
 
 
@@ -33,7 +121,7 @@ def _isobar_segment(s_start, s_end, p, cycle_config, general_config):
     T_range = np.zeros(num_points)
     for i, s in enumerate(s_range):
         try:
-            T_range[i] = PropsSI("T", "P", p, "S", s, f"REFPROP::{refrigerant}")
+            T_range[i] = _cp_props("T", "P", p, "S", s, f"REFPROP::{refrigerant}")
         except ValueError:
             pass
     return s_range.tolist(), T_range.tolist()
@@ -69,8 +157,8 @@ def _specific_heat_from_isobar_path(
         # Derive enthalpy bounds from the temperature endpoints, then delegate to
         # the enthalpy-based sampler.  The returned T_range is used directly for
         # the cp integration so no extra PropsSI calls are needed here.
-        h_start = PropsSI("H", "P", p, "T", T_start, f"REFPROP::{cycle_config['refrigerant']}")
-        h_end   = PropsSI("H", "P", p, "T", T_end,   f"REFPROP::{cycle_config['refrigerant']}")
+        h_start = _cp_props("H", "P", p, "T", T_start, f"REFPROP::{cycle_config['refrigerant']}")
+        h_end   = _cp_props("H", "P", p, "T", T_end,   f"REFPROP::{cycle_config['refrigerant']}")
         _, T_range, _ = _sample_isobar_ts_uniform_arc(
             h_start,
             h_end,
@@ -87,7 +175,7 @@ def _specific_heat_from_isobar_path(
     heat = 0
     for T_1, T_2 in zip(T_range[:-1], T_range[1:]):
         try:
-            cp = PropsSI("C", "P", p, "T", T_1, f"REFPROP::{cycle_config['refrigerant']}")
+            cp = _cp_props("C", "P", p, "T", T_1, f"REFPROP::{cycle_config['refrigerant']}")
             heat += cp * np.abs(T_2 - T_1)
         except ValueError:
             pass
@@ -114,11 +202,18 @@ def _sample_isobar_ts_uniform_arc(h_start, h_end, p, cycle_config, num_points=20
     h_arr = np.linspace(h_start, h_end, n)
     T_arr = np.full_like(h_arr, np.nan, dtype=float)
     s_arr = np.full_like(h_arr, np.nan, dtype=float)
+
+    # one thermodynamic state object per call to avoid repeated PropsSI overhead.
+    state = CP.AbstractState("REFPROP", refrigerant)
+
     for i, h in enumerate(h_arr):
         try:
-            T_arr[i] = PropsSI("T", "P", p, "H", h, f"REFPROP::{refrigerant}")
-            s_arr[i] = PropsSI("S", "P", p, "H", h, f"REFPROP::{refrigerant}")
+            state.update(CP.HmassP_INPUTS, h, p)
+            T_arr[i] = state.T()
+            s_arr[i] = state.smass()
         except ValueError:
+            pass
+        except RuntimeError:
             pass
 
     valid = np.isfinite(T_arr) & np.isfinite(s_arr) & np.isfinite(h_arr)
@@ -191,7 +286,7 @@ def solve_cycle(cycle_config, general_config):
 
         # Station 1 — compressor inlet (fixed by user inputs)
         T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-        p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+        p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
         p_ref_1 = p_ev
 
         # Pressure ratio bisection bounds
@@ -208,23 +303,23 @@ def solve_cycle(cycle_config, general_config):
 
             # Station 1 - compressor inlet
             T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-            p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+            p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
             p_ref_1 = p_ev
             T_ref_1 = T_h_in - ΔT_pp_1
-            h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-            s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+            h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+            s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
 
             # Station 2 - condenser inlet
             p_ref_2 = PR_guess * p_ref_1
-            h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+            h_ref_2_is = _cp_props("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
             h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
-            Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
-            s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+            Q_ref_2 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+            s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
             # Station 3 - turbine inlet
             T_ref_3 = T_c_in + ΔT_pp_3
             p_ref_3 = p_ref_2
-            s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+            s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
 
             # check if cycle converged without achieving the specifications
             if math.isclose(p_ref_2, p_ref_2_conv, rel_tol=1e-6):
@@ -234,7 +329,7 @@ def solve_cycle(cycle_config, general_config):
             p_ref_2_conv = p_ref_2
 
             # Determine if the current PR_guess leads to a supercritical cycle.
-            if p_ref_2 > PropsSI("Pcrit", f"REFPROP::{refrigerant}"):
+            if p_ref_2 > _cp_props("Pcrit", f"REFPROP::{refrigerant}"):
                 supercritical_cycle = True
             else:
                 supercritical_cycle = False
@@ -307,33 +402,33 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
 
     # Station 1 — compressor inlet (fixed by user inputs)
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     
     # Station 1
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     T_ref_1 = T_h_in - ΔT_pp_1
-    h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-    s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-    Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
+    h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    Q_ref_1 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
 
     # Station 2 — condenser inlet
     p_ref_2 = PR_guess * p_ref_1
-    h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+    h_ref_2_is = _cp_props("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
     h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
-    T_ref_2 = PropsSI("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
-    Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
-    s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    T_ref_2 = _cp_props("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    Q_ref_2 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+    s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
     # Station 3 — turbine inlet
     T_ref_3 = T_c_in + ΔT_pp_3
     p_ref_3 = p_ref_2
-    h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-    s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-    Q_ref_3 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
-    T_cond = PropsSI("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
+    h_ref_3 = _cp_props("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    Q_ref_3 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
+    T_cond = _cp_props("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
 
     # Impossible cycle check
     if T_ref_2 < T_ref_3 * 0.99:
@@ -367,18 +462,18 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
 
     # Station 4 — evaporator inlet
     p_ref_4 = p_ref_1
-    h_ref_4_is = PropsSI("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
+    h_ref_4_is = _cp_props("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
     h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
-    T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
-    Q_ref_4 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
-    Q_ref_4_isenth = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
-    s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    T_ref_4 = _cp_props("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    Q_ref_4 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
+    Q_ref_4_isenth = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
+    s_ref_4 = _cp_props("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
 
     # Latent heats
-    Δh_cond = (PropsSI("H", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}") -
-                PropsSI("H", "P", p_ref_2, "Q", 0, f"REFPROP::{refrigerant}"))
-    Δh_ev = (PropsSI("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
-                PropsSI("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
+    Δh_cond = (_cp_props("H", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}") -
+                _cp_props("H", "P", p_ref_2, "Q", 0, f"REFPROP::{refrigerant}"))
+    Δh_ev = (_cp_props("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
+                _cp_props("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
     
     #Pinch-point 2 heat balance → ṁ_ref For non-supercritical cycle, one can assume that the superheating near ref_2 has a slope large enough for this method to make sense
     T_c_pp_2 = T_cond - ΔT_pp_2
@@ -448,32 +543,32 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
 
     # Station 1 — compressor inlet (fixed by user inputs)
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
 
     # Station 1
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     T_ref_1 = T_h_in - ΔT_pp_1
-    h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-    s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-    Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
+    h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    Q_ref_1 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
 
     # Station 2 — condenser inlet
     p_ref_2 = PR_guess * p_ref_1
-    h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+    h_ref_2_is = _cp_props("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
     h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
-    T_ref_2 = PropsSI("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
-    Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
-    s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    T_ref_2 = _cp_props("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    Q_ref_2 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+    s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
     # Station 3 — turbine inlet
     T_ref_3 = T_c_in + ΔT_pp_3
     p_ref_3 = p_ref_2
-    h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-    s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-    Q_ref_3 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
+    h_ref_3 = _cp_props("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    Q_ref_3 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
     
     # Impossible cycle check
     if T_ref_2 < T_ref_3 * 0.99:
@@ -507,16 +602,16 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
     
     # Station 4 — evaporator inlet
     p_ref_4 = p_ref_1
-    h_ref_4_is = PropsSI("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
+    h_ref_4_is = _cp_props("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
     h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
-    T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
-    Q_ref_4 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
-    Q_ref_4_isenth = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
-    s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    T_ref_4 = _cp_props("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    Q_ref_4 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
+    Q_ref_4_isenth = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
+    s_ref_4 = _cp_props("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
 
     # Latent heats, only Δh_ev since supercritical cycle, no condensation occurs
-    Δh_ev   = (PropsSI("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
-                PropsSI("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
+    Δh_ev   = (_cp_props("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
+                _cp_props("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
 
     # Pinch-point 2 heat balance → ṁ_ref. See annotation.md statement 8.            
     ṁ_ref_bisection_range = [1e-5, 100]  # kg/s [lower_bound, upper_bound] for mass flow rate through the cycle
@@ -540,12 +635,7 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
             cycle_config,
             num_points=80,
         )
-        T_c_arr = np.zeros_like(T_ref_arr)
-        for i, (T_ref, s_ref, h_ref) in enumerate(zip(T_ref_arr, s_ref_arr, h_ref_arr)):
-            heat_transferred = 0
-            Q_ref = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref, f"REFPROP::{refrigerant}"))
-            heat_transferred += (h_ref - h_ref_3) * ṁ_ref_guess
-            T_c_arr[i] = T_c_in + heat_transferred / (ṁ_c * cp_c)
+        T_c_arr = T_c_in + (h_ref_arr - h_ref_3) * ṁ_ref_guess / (ṁ_c * cp_c)
         T_diff_arr = T_ref_arr - T_c_arr
         negative_slope_points = np.where(np.diff(T_diff_arr) < 0)[0]
         # Rationale behind the if statement: see annotations.md statement 5.
@@ -637,33 +727,33 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config):
 
     # Station 1 — compressor inlet (fixed by user inputs)
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     
     # Station 1
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     T_ref_1 = T_h_in - ΔT_pp_1
-    h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-    s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-    Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
+    h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    Q_ref_1 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
 
     # Station 2 — condenser inlet
     p_ref_2 = PR * p_ref_1
-    h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+    h_ref_2_is = _cp_props("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
     h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
-    T_ref_2 = PropsSI("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
-    Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
-    s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    T_ref_2 = _cp_props("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    Q_ref_2 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+    s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
     # Station 3 — turbine inlet
     T_ref_3 = T_c_in + ΔT_pp_3
     p_ref_3 = p_ref_2
-    h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-    s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-    Q_ref_3 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
-    T_cond = PropsSI("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
+    h_ref_3 = _cp_props("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    Q_ref_3 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
+    T_cond = _cp_props("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
 
     # Impossible cycle check
     if T_ref_2 < T_ref_3 * 0.99:
@@ -691,18 +781,18 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config):
 
     # Station 4 — evaporator inlet
     p_ref_4 = p_ref_1
-    h_ref_4_is = PropsSI("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
+    h_ref_4_is = _cp_props("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
     h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
-    T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
-    Q_ref_4 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
-    Q_ref_4_isenth = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
-    s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    T_ref_4 = _cp_props("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    Q_ref_4 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
+    Q_ref_4_isenth = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
+    s_ref_4 = _cp_props("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
 
     # Latent heats
-    Δh_cond = (PropsSI("H", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}") -
-                PropsSI("H", "P", p_ref_2, "Q", 0, f"REFPROP::{refrigerant}"))
-    Δh_ev = (PropsSI("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
-                PropsSI("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
+    Δh_cond = (_cp_props("H", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}") -
+                _cp_props("H", "P", p_ref_2, "Q", 0, f"REFPROP::{refrigerant}"))
+    Δh_ev = (_cp_props("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
+                _cp_props("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
     
     # Pinch point 4 heat balance → ṁ_ref. For non-supercritical cycle, one can assume that the subcooling near ref_4 has a slope large enough for this method to make sense
     T_h_pp_4 = T_ev + ΔT_pp_4
@@ -762,33 +852,33 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config):
 
     # Station 1 — compressor inlet (fixed by user inputs)
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     
     # Station 1
     T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
-    p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
+    p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     T_ref_1 = T_h_in - ΔT_pp_1
-    h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-    s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-    Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
+    h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
+    Q_ref_1 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
 
     # Station 2 — condenser inlet
     p_ref_2 = PR * p_ref_1
-    h_ref_2_is = PropsSI("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
+    h_ref_2_is = _cp_props("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
     h_ref_2 = (h_ref_2_is - h_ref_1) / η_compr + h_ref_1
-    T_ref_2 = PropsSI("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
-    Q_ref_2 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
-    s_ref_2 = PropsSI("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    T_ref_2 = _cp_props("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
+    Q_ref_2 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
+    s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
     # Station 3 — turbine inlet
     T_ref_3 = T_c_in + ΔT_pp_3
     p_ref_3 = p_ref_2
-    h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-    s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
-    Q_ref_3 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
-    T_cond = PropsSI("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
+    h_ref_3 = _cp_props("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
+    Q_ref_3 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}"))
+    T_cond = _cp_props("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}")
 
     # Impossible cycle check
     if T_ref_2 < T_ref_3 * 0.99:
@@ -816,16 +906,16 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config):
 
     # Station 4 — evaporator inlet
     p_ref_4 = p_ref_1
-    h_ref_4_is = PropsSI("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
+    h_ref_4_is = _cp_props("H", "P", p_ref_4, "S", s_ref_3, f"REFPROP::{refrigerant}")
     h_ref_4 = (h_ref_4_is - h_ref_3) * η_turb + h_ref_3
-    T_ref_4 = PropsSI("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
-    Q_ref_4 = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
-    Q_ref_4_isenth = _vapour_quality_scaler(PropsSI("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
-    s_ref_4 = PropsSI("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    T_ref_4 = _cp_props("T", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
+    Q_ref_4 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}"))
+    Q_ref_4_isenth = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_4, "H", h_ref_3, f"REFPROP::{refrigerant}"))
+    s_ref_4 = _cp_props("S", "P", p_ref_4, "H", h_ref_4, f"REFPROP::{refrigerant}")
 
     # Latent heats
-    Δh_ev = (PropsSI("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
-             PropsSI("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
+    Δh_ev = (_cp_props("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
+             _cp_props("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}"))
     
     # Pinch point 4 heat balance → ṁ_ref. For non-supercritical cycle, one can assume that the subcooling near ref_4 has a slope large enough for this method to make sense
     T_h_pp_4 = T_ev + ΔT_pp_4
@@ -881,7 +971,7 @@ def compute_performance(state, cycle_config, general_config):
 
     COP_turb = Q_out / (Ẇ_comp - Ẇ_turb * ɳ_shaft)
 
-    h_ref_4_is = PropsSI("H", "P", s["p_ref_4"], "S", s["s_ref_3"], f"REFPROP::{refrigerant}")
+    h_ref_4_is = _cp_props("H", "P", s["p_ref_4"], "S", s["s_ref_3"], f"REFPROP::{refrigerant}")
     Ẇ_turb_is  = s["ṁ_ref"] * (s["h_ref_3"] - h_ref_4_is)
     COP_is     = Q_out / (Ẇ_comp - Ẇ_turb_is * ɳ_shaft)
 
@@ -906,10 +996,10 @@ def build_ts_data(state, cycle_config, general_config):
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
 
     if not s["supercritical_cycle"]:
-        s_ref_23_v_inflection = PropsSI("S", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
-        s_ref_23_l_inflection = PropsSI("S", "P", p2, "Q", 0, f"REFPROP::{refrigerant}")
-    s_ref_41_v_inflection = PropsSI("S", "P", p1, "Q", 1, f"REFPROP::{refrigerant}")
-    s_ref_41_l_inflection = PropsSI("S", "P", p1, "Q", 0, f"REFPROP::{refrigerant}")
+        s_ref_23_v_inflection = _cp_props("S", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
+        s_ref_23_l_inflection = _cp_props("S", "P", p2, "Q", 0, f"REFPROP::{refrigerant}")
+    s_ref_41_v_inflection = _cp_props("S", "P", p1, "Q", 1, f"REFPROP::{refrigerant}")
+    s_ref_41_l_inflection = _cp_props("S", "P", p1, "Q", 0, f"REFPROP::{refrigerant}")
 
     # Condenser path 2 -> 3:
     if s["supercritical_cycle"]:
@@ -952,7 +1042,7 @@ def build_ts_data(state, cycle_config, general_config):
         [s["T_ref_4"]], T_41_chain
     ))
 
-    s_ref_23_v_inflection = PropsSI("S", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
+    s_ref_23_v_inflection = _cp_props("S", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
     if s["Q_ref_2"] >= 1:
         s_pp_anchor = s_ref_23_v_inflection
         s_c_out = s["s_ref_3"] + (s_pp_anchor - s["s_ref_3"]) / (s["T_c_pp_2"] - T_c_in) * (s["T_c_out"] - T_c_in)
@@ -974,10 +1064,10 @@ def build_ph_data(state, cycle_config):
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
 
     if not s["supercritical_cycle"]:
-        h_ref_23_v_inflection = PropsSI("H", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
-        h_ref_23_l_inflection = PropsSI("H", "P", p2, "Q", 0, f"REFPROP::{refrigerant}")
-    h_ref_41_v_inflection = PropsSI("H", "P", p1, "Q", 1, f"REFPROP::{refrigerant}")
-    h_ref_41_l_inflection = PropsSI("H", "P", p1, "Q", 0, f"REFPROP::{refrigerant}")
+        h_ref_23_v_inflection = _cp_props("H", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
+        h_ref_23_l_inflection = _cp_props("H", "P", p2, "Q", 0, f"REFPROP::{refrigerant}")
+    h_ref_41_v_inflection = _cp_props("H", "P", p1, "Q", 1, f"REFPROP::{refrigerant}")
+    h_ref_41_l_inflection = _cp_props("H", "P", p1, "Q", 0, f"REFPROP::{refrigerant}")
 
     # Condenser path 2 -> 3:
     if s["supercritical_cycle"]:
