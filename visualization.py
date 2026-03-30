@@ -83,14 +83,14 @@ def _verification_path_with_isenthalpic_expansion(verification_data, cycle_confi
 
 # Axis-bound calculation
 # ======================
-def _cycle_bounds_ts(state, cycle_config):
+def _cycle_bounds_ts(cycle_data, cycle_config):
     ts_margin_s_left = general_config.get("ts_margin_s_left", 0.2)
     ts_margin_s_right = general_config.get("ts_margin_s_right", 0.2)
     ts_margin_T_bot = general_config.get("ts_margin_T_bot", 0.2)
     ts_margin_T_top = general_config.get("ts_margin_T_top", 0.15)
 
-    s_vals = [state[k] for k in ("s_ref_1","s_ref_2","s_ref_3","s_ref_4")]
-    T_vals = [state[k] for k in ("T_ref_1","T_ref_2","T_ref_3","T_ref_4")]
+    s_vals = [cycle_data[k] for k in ("s_ref_1","s_ref_2","s_ref_3","s_ref_4")]
+    T_vals = [cycle_data[k] for k in ("T_ref_1","T_ref_2","T_ref_3","T_ref_4")]
 
     # Always include the critical point
     p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
@@ -110,14 +110,14 @@ def _cycle_bounds_ts(state, cycle_config):
             T_lo - dT*ts_margin_T_bot,   T_hi + dT*ts_margin_T_top)
 
 
-def _cycle_bounds_ph(state, cycle_config):
+def _cycle_bounds_ph(cycle_data, cycle_config):
     ph_margin_h_left = general_config.get("ph_margin_h_left", 0.3)
     ph_margin_h_right = general_config.get("ph_margin_h_right", 0.15)
     ph_margin_p_bot = general_config.get("ph_margin_p_bot", 0.1)
     ph_margin_p_top = general_config.get("ph_margin_p_top", 0.2)
 
-    h_vals = [state[k] for k in ("h_ref_1","h_ref_2","h_ref_3","h_ref_4")]
-    p_vals = [state[k] for k in ("p_ref_1","p_ref_2","p_ref_3","p_ref_4")]
+    h_vals = [cycle_data[k] for k in ("h_ref_1","h_ref_2","h_ref_3","h_ref_4")]
+    p_vals = [cycle_data[k] for k in ("p_ref_1","p_ref_2","p_ref_3","p_ref_4")]
 
     # Always include the critical point
     p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
@@ -418,8 +418,8 @@ def _draw_isolines_labeled(ax, lines, color, frac, fmt_short, fmt_named,
 
 # Expansion lines + legend
 # ========================
-def _add_expansion_lines(ax, state, diagram_type, cycle_config, include_verification=False):
-    s     = state
+def _add_expansion_lines(ax, cycle_data, diagram_type, cycle_config, include_verification=False):
+    s     = cycle_data
     p_exp = np.linspace(s["p_ref_3"], s["p_ref_1"], 150)
     col   = "#02220E"
     alp   = 0.75
@@ -544,13 +544,13 @@ COL_VERIFICATION = '#0d1f3c' # very dark slate blue (for verification/reference 
 
 # TS renderer
 # ===========
-def _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=None):
+def _make_plot_ts(cycle_data, perf, ts_data, cycle_config, verification_data=None):
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
     resolution = general_config.get("resolution", "low")
     n_pts = 150 if resolution == "low" else 600
 
-    s_lo, s_hi, T_lo, T_hi = _cycle_bounds_ts(state, cycle_config)
+    s_lo, s_hi, T_lo, T_hi = _cycle_bounds_ts(cycle_data, cycle_config)
     fig, ax = plt.subplots(figsize=(10, 7))
     ax.set_xlim(s_lo, s_hi)
     ax.set_ylim(T_lo, T_hi)
@@ -622,7 +622,7 @@ def _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=None):
 
     _add_expansion_lines(
         ax,
-        state,
+        cycle_data,
         "TS",
         cycle_config,
         include_verification=(verification_data is not None),
@@ -647,13 +647,13 @@ def _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=None):
 
 # PH renderer
 # ===========
-def _make_plot_ph(state, perf, ph_data, cycle_config, verification_data=None):
+def _make_plot_ph(cycle_data, perf, ph_data, cycle_config, verification_data=None):
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
     resolution = general_config.get("resolution", "low")
     n_pts = 150 if resolution == "low" else 600
 
-    h_lo, h_hi, p_lo, p_hi = _cycle_bounds_ph(state, cycle_config)
+    h_lo, h_hi, p_lo, p_hi = _cycle_bounds_ph(cycle_data, cycle_config)
     p_lo = max(p_lo, 1e2)
 
     fig, ax = plt.subplots(figsize=(10, 7))
@@ -725,7 +725,7 @@ def _make_plot_ph(state, perf, ph_data, cycle_config, verification_data=None):
 
     _add_expansion_lines(
         ax,
-        state,
+        cycle_data,
         "PH",
         cycle_config,
         include_verification=(verification_data is not None),
@@ -891,7 +891,7 @@ def _make_empty_plot_ph(cycle_config):
 # Public entry point for TS or PH plotting
 # ========================================
 def make_thdy_plot(
-    state,
+    cycle_data,
     perf,
     diagram_type,
     cycle_config,
@@ -903,8 +903,8 @@ def make_thdy_plot(
 ):
     refrigerant = cycle_config["refrigerant"]
     _configure_matplotlib()
-    fig = _make_plot_ts(state, perf, ts_data, cycle_config, verification_data=verification_data) if diagram_type == "TS" \
-          else _make_plot_ph(state, perf, ph_data, cycle_config, verification_data=verification_data)
+    fig = _make_plot_ts(cycle_data, perf, ts_data, cycle_config, verification_data=verification_data) if diagram_type == "TS" \
+          else _make_plot_ph(cycle_data, perf, ph_data, cycle_config, verification_data=verification_data)
     output_root = Path(output_dir)
     output_path = output_root / refrigerant / f"Conceptual HP Cycle - {refrigerant} - {diagram_type}.pdf"
     output_path.parent.mkdir(parents=True, exist_ok=True)

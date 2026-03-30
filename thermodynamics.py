@@ -266,7 +266,7 @@ def _check_second_derivative_sign(s_arr, T_arr):
 
 # Cycle solver
 # ============
-def solve_cycle(cycle_config, general_config):
+def solve_cycle(cycle_config, general_config, verbose=True):
     if "PR" in cycle_config: # cycle fully specified by three pp and one PR
         if not supercritical_cycle:
             cycle_data = evaluate_subcritical_cycle_PR(cycle_config, general_config)
@@ -323,9 +323,8 @@ def solve_cycle(cycle_config, general_config):
 
             # check if cycle converged without achieving the specifications
             if math.isclose(p_ref_2, p_ref_2_conv, rel_tol=1e-6):
-                logger.critical("Convergence stagnated for PR bisection. Reason to believe heat pump cycle for specifications is impossible without"
+                raise StopIteration("Convergence stagnated for PR bisection. Reason to believe heat pump cycle for specifications is impossible without"
                     "the cycle occurring fully on the right side of the critical point (the typical result for if convergence is achieved without the specifications having been achieved).")
-                sys.exit()
             p_ref_2_conv = p_ref_2
 
             # Determine if the current PR_guess leads to a supercritical cycle.
@@ -339,8 +338,9 @@ def solve_cycle(cycle_config, general_config):
                 s_arr, T_arr = _isobar_segment(s_ref_3, s_ref_2, p_ref_2, cycle_config, general_config)
                 sign = _check_second_derivative_sign(s_arr, T_arr)
                 if sign >= 0:
-                    logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is non-negative."
-                        "Adjusting pressure ratio bounds for bisection.")
+                    if verbose:
+                        logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is non-negative."
+                            "Adjusting pressure ratio bounds for bisection.")
                     # Rationale behind the return statement: see annotations.md statement 1.
                     PR_bisection_range[1] = PR_guess
                     continue
@@ -351,9 +351,9 @@ def solve_cycle(cycle_config, general_config):
 
             # Separate logic based on of the cycle. Putting this is a single function made it hard to interpret.        
             if not supercritical_cycle:
-                cycle_metadata, cycle_data = evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess)
+                cycle_metadata, cycle_data = evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess, verbose=verbose)
             if supercritical_cycle:
-                cycle_metadata, cycle_data = evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess)
+                cycle_metadata, cycle_data = evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess, verbose=verbose)
 
             # If any of the triggers for an impossible cycle under the constraints are hit, continue based on the appropriate bisection update. 
             if cycle_metadata["continue"] == True:
@@ -377,7 +377,7 @@ def solve_cycle(cycle_config, general_config):
 
         
         
-def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
+def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess, verbose=True):
     """
     evaluates the subcritical thermodynamic cycle which is fully constrained by the pinch point specifications. 
     """
@@ -432,8 +432,9 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
 
     # Impossible cycle check
     if T_ref_2 < T_ref_3 * 0.99:
-        logger.info(f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3"
-            f"temperature (T_ref_3 = {T_ref_3:.2f} K). Adjusting pressure ratio bounds for bisection.")
+        if verbose:
+            logger.info(f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3"
+                f"temperature (T_ref_3 = {T_ref_3:.2f} K). Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 2.
         cycle_metadata = {"continue": True, "bisection_update_bound": "lower"}
         cycle_data = None
@@ -441,7 +442,8 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
 
     # Impossible cycle check
     if Q_ref_3 == 1:
-        logger.info("Station 3 is saturated vapour. Adjusting pressure ratio bounds for bisection.")
+        if verbose:
+            logger.info("Station 3 is saturated vapour. Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 3.
         cycle_metadata = {"continue": True, "bisection_update_bound": "lower"}
         cycle_data = None
@@ -453,8 +455,9 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
     # impossible cycle check
     sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
     if sign > 0:
-        logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
-            "Adjusting pressure ratio bounds for bisection.")
+        if verbose:
+            logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
+                "Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 4.
         cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
         cycle_data = None
@@ -497,7 +500,7 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
     ΔT_pp_4_calculated = T_h_pp_4 - T_ev
 
     # store the thermodynamic cycle state in a dict
-    state = dict(
+    cycle_data = dict(
         p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
         p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
@@ -509,16 +512,14 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess):
     # Rationale behind the return statement: see annotations.md statement 7.
     if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
         cycle_metadata = {"continue": False, "bisection_update_bound": "upper"}
-        cycle_data = state
         return cycle_metadata, cycle_data
     else:
         cycle_metadata = {"continue": False, "bisection_update_bound": "lower"}
-        cycle_data = state
         return cycle_metadata, cycle_data
 
 
 
-def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
+def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess, verbose=True):
     """
     evaluates the supercritical thermodynamic cycle which is fully constrained by the pinch point specifications. 
     """
@@ -572,8 +573,9 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
     
     # Impossible cycle check
     if T_ref_2 < T_ref_3 * 0.99:
-        logger.info(f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3 "
-            f"temperature (T_ref_3 = {T_ref_3:.2f} K). Adjusting pressure ratio bounds for bisection.")
+        if verbose:
+            logger.info(f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3 "
+                f"temperature (T_ref_3 = {T_ref_3:.2f} K). Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 2.
         cycle_metadata = {"continue": True, "bisection_update_bound": "lower"}
         cycle_data = None
@@ -581,7 +583,8 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
 
     # Impossible cycle check
     if Q_ref_3 == 1:
-        logger.info("Station 3 is saturated vapour. Adjusting pressure ratio bounds for bisection.")
+        if verbose:
+            logger.info("Station 3 is saturated vapour. Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 3.
         cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
         cycle_data = None
@@ -593,8 +596,9 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
     # impossible cycle check
     sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
     if sign > 0:
-        logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
-            "Adjusting pressure ratio bounds for bisection.")
+        if verbose:
+            logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
+                "Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 4.
         cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
         cycle_data = None
@@ -622,7 +626,8 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
     while not math.isclose(ΔT_pp_2_calculated, ΔT_pp_2, rel_tol=1e-6):
         ṁ_ref_guess = sum(ṁ_ref_bisection_range) / 2
         if math.isclose(ṁ_ref_guess, ṁ_ref_conv, rel_tol=1e-8):
-            logger.info("Convergence stagnated for ΔT_pp_2_calculated. Reason to believe the pp requirement is not possible for the current isobar. " \
+            if verbose:
+                logger.info("Convergence stagnated for ΔT_pp_2_calculated. Reason to believe the pp requirement is not possible for the current isobar. " \
             "We would like to have a supercritical cycle, increasing PR")
             stagnation = True
             break
@@ -640,8 +645,9 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
         negative_slope_points = np.where(np.diff(T_diff_arr) < 0)[0]
         # Rationale behind the if statement: see annotations.md statement 5.
         if len(negative_slope_points) == 0:
-            logger.info(f"No negative slope points found for ṁ_ref_guess = {ṁ_ref_guess:.6f} kg/s. This indicates that the mass flow rate guess is too low to achieve the required ΔT_pp_2." \
-                            "Adjusting mass flow rate bounds for bisection.") 
+            if verbose:
+                logger.info(f"No negative slope points found for ṁ_ref_guess = {ṁ_ref_guess:.6f} kg/s. This indicates that the mass flow rate guess is too low to achieve the required ΔT_pp_2." \
+                            "Adjusting mass flow rate bounds for bisection.")
             ṁ_ref_bisection_range[0] = ṁ_ref_guess
             continue
         closest_point_index = negative_slope_points[np.argmin(T_diff_arr[negative_slope_points])]
@@ -660,9 +666,10 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
     # which may be due to the cycle being supercritical with a pressure ratio that is too low. In this case, we break out of the mass flow rate bisection 
     # loop and continue with adjusting the pressure ratio bounds for bisection.
     if stagnation:
-        logger.info("Stagnation occurred during pinch point 2 mass flow rate bisection. This likely indicates that the pinch point requirements " \
-        "are not achievable for the current isobar, which may be due to the cycle being supercritical with a pressure ratio that is too low. " \
-        "Adjusting pressure ratio bounds for bisection.")
+        if verbose:
+            logger.info("Stagnation occurred during pinch point 2 mass flow rate bisection. This likely indicates that the pinch point requirements " \
+            "are not achievable for the current isobar, which may be due to the cycle being supercritical with a pressure ratio that is too low. " \
+            "Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 6.
         cycle_metadata = {"continue": True, "bisection_update_bound": "lower"}
         cycle_data = None
@@ -681,7 +688,7 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
     ΔT_pp_4_calculated = T_h_pp_4 - T_ev
 
     # store the thermodynamic cycle state in a dict
-    state = dict(
+    cycle_data = dict(
         p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
         p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
@@ -693,16 +700,14 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess):
     # Rationale behind the return statement: see annotations.md statement 7.
     if (ΔT_pp_4_calculated - ΔT_pp_4) < 0:
         cycle_metadata = {"continue": False, "bisection_update_bound": "upper"}
-        cycle_data = state
         return cycle_metadata, cycle_data
     else:
         cycle_metadata = {"continue": False, "bisection_update_bound": "lower"}
-        cycle_data = state
         return cycle_metadata, cycle_data
 
 
 
-def evaluate_subcritical_cycle_PR(cycle_config, general_config):
+def evaluate_subcritical_cycle_PR(cycle_config, general_config, verbose=True):
     """
     evaluates the supercritical thermodynamic cycle which is fully constrained by the three pp and a pressure ratio specification. 
     """
@@ -772,8 +777,9 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config):
     # impossible cycle check
     sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
     if sign > 0:
-        logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
-            "Adjusting pressure ratio bounds for bisection.")
+        if verbose:
+            logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
+                "Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 4.
         cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
         cycle_data = None
@@ -815,7 +821,7 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config):
     T_c_pp_2 = T_c_out - _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
 
     # store the thermodynamic cycle state in a dict
-    state = dict(
+    cycle_data = dict(
         p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
         p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
@@ -823,11 +829,11 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config):
         T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
         Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
     )
-    return state
+    return cycle_data
 
 
 
-def evaluate_supercritical_cycle_PR(cycle_config, general_config):
+def evaluate_supercritical_cycle_PR(cycle_config, general_config, verbose=True):
     """
     evaluates the supercritical thermodynamic cycle which is fully constrained by the three pp and a pressure ratio specification. 
     """
@@ -897,8 +903,9 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config):
     # impossible cycle check
     sign = _check_second_derivative_sign(s_ref_arr, T_ref_arr)
     if sign > 0:
-        logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
-            "Adjusting pressure ratio bounds for bisection.")
+        if verbose:
+            logger.info("Second derivative d²T/ds² along the isobar between station 3 and 2 is positive. "
+                "Adjusting pressure ratio bounds for bisection.")
         # Rationale behind the return statement: see annotations.md statement 4.
         cycle_metadata = {"continue": True, "bisection_update_bound": "upper"}
         cycle_data = None
@@ -936,7 +943,7 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config):
     T_c_pp_2 = T_c_out - _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
 
     # store the thermodynamic cycle state in a dict
-    state = dict(
+    cycle_data = dict(
         p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
         p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
@@ -944,14 +951,14 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config):
         T_ev=T_ev, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
         Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
     )
-    return state
+    return cycle_data
 
 
 
 # Performance metrics
 # ===================
-def compute_performance(state, cycle_config, general_config):
-    s = state
+def compute_performance(cycle_data, cycle_config, general_config):
+    s = cycle_data
     ṁ_c = cycle_config["ṁ_c"]
     cp_c = cycle_config["cp_c"]
     T_c_in = cycle_config["T_c_in"]
@@ -987,8 +994,8 @@ def compute_performance(state, cycle_config, general_config):
 
 # Diagram data preparation
 # ========================
-def build_ts_data(state, cycle_config, general_config):
-    s = state
+def build_ts_data(cycle_data, cycle_config, general_config):
+    s = cycle_data
     refrigerant = cycle_config["refrigerant"]
     T_c_in = cycle_config["T_c_in"]
     T_h_in = cycle_config["T_h_in"]
@@ -1058,8 +1065,8 @@ def build_ts_data(state, cycle_config, general_config):
     )
 
 
-def build_ph_data(state, cycle_config):
-    s = state
+def build_ph_data(cycle_data, cycle_config):
+    s = cycle_data
     refrigerant = cycle_config["refrigerant"]
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
 

@@ -15,6 +15,7 @@ from rich.progress import track
 import numpy as np
 import warnings
 import timeit
+import os
 
 logger = setup_logger()
 start = timeit.default_timer()
@@ -33,8 +34,8 @@ def main(perform_verification=True):
 
     if analysis_type == "single_configuration":
         logger.info("Evaluating conceptual heat pump cycle")
-        state = solve_cycle(cycle_config, general_config)
-        perf = compute_performance(state, cycle_config, general_config)
+        cycle_data = solve_cycle(cycle_config, general_config, verbose=True)
+        perf = compute_performance(cycle_data, cycle_config, general_config)
         table = Table(title=f"Conceptual Heat Pump Cycle - {cycle_config['refrigerant']}", show_lines=False)
         table.add_column("Symbol", style="cyan", no_wrap=True)
         table.add_column("Value", justify="right")
@@ -56,21 +57,21 @@ def main(perform_verification=True):
         Console().print(table)
         logger.info("Rendering T-S diagram")
         make_thdy_plot(
-            state,
+            cycle_data,
             perf,
             diagram_type="TS",
             cycle_config=cycle_config,
             output_dir="heat_pump_thermodynamic_diagrams",
-            ts_data=build_ts_data(state, cycle_config, general_config),
+            ts_data=build_ts_data(cycle_data, cycle_config, general_config),
         )
         logger.info("Rendering P-H diagram")
         make_thdy_plot(
-            state,
+            cycle_data,
             perf,
             diagram_type="PH",
             cycle_config=cycle_config,
             output_dir="heat_pump_thermodynamic_diagrams",
-            ph_data=build_ph_data(state, cycle_config),
+            ph_data=build_ph_data(cycle_data, cycle_config),
         )
         logger.info("Evaluation Completed")
 
@@ -92,16 +93,26 @@ def main(perform_verification=True):
             cycle_config["η_turb"]  = X[i, j]
             cycle_config["η_compr"] = Y[i, j]
             try:
-                state = solve_cycle(cycle_config, general_config)
-                perf  = compute_performance(state, cycle_config, general_config)
+                cycle_data = solve_cycle(cycle_config, general_config, verbose=False)
+                perf  = compute_performance(cycle_data, cycle_config, general_config)
                 Z[i, j] = perf[cop_sweep_key]          # realistic COP with turbine work recovery
             except Exception as e:
                 if not general_config.get("ignore_coolprop_warnings", False):
                     logger.warning(f"Failed at η_turb={X[i,j]:.3f}, η_compr={Y[i,j]:.3f}: {e}")
                 Z[i, j] = np.nan
-        logger.info("Sweep completed. Generating heatmap + 3D surface")
+        logger.info("Sweep completed. Saving data to file")
+        # Create output directory if it doesn't exist
+        output_dir = "COP_investigations"
+        os.makedirs(output_dir, exist_ok=True)
+        # Save the sweep data for recovery if plotting fails
+        refrigerant = cycle_config["refrigerant"]
+        data_file = os.path.join(output_dir, f"COP_vs_eff_{refrigerant}_{cop_sweep_key}.npz")
+        np.savez_compressed(data_file, X=X, Y=Y, Z=Z)
+        logger.info(f"Data saved to {data_file}")
+        logger.info("Generating heatmap + 3D surface")
         make_COP_vs_eff_plot(X, Y, Z, cycle_config)  
         logger.info(f"{cop_sweep_key} vs efficiency investigation completed")
+        
     elif analysis_type == "substance_thermodynamic_diagrams":
         substances = general_config.get("substances_to_plot", [cycle_config["refrigerant"]])
         logger.info(f"Generating empty thermodynamic diagrams for {len(substances)} substance(s)")
