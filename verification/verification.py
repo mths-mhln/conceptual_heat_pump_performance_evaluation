@@ -54,7 +54,7 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
         overall_max_discrepancy = 0.0
         for cycle_config in [cycle_config_R1233zd_E, cycle_config_n_pentane, cycle_config_MM]:  
             logger.info(f"Evaluating conceptual heat pump cycle for refrigerant: {cycle_config['refrigerant']}")
-            state = solve_cycle(cycle_config, general_config)
+            state = solve_cycle(cycle_config, general_config, verbose = False)
             perf = compute_performance(state, cycle_config, general_config)
             max_discrepancy = _append_verification_rows(
                 table=table,
