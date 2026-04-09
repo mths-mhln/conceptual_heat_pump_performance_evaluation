@@ -930,15 +930,15 @@ def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_therm
 
 # Public entry point for COP_vs_eff_investigation
 # ===============================================
-def make_COP_vs_eff_plot(X, Y, Z, cycle_config):
+def make_COP_vs_eff_plot(X, Y, Z, cycle_config, output_dir="00_obtained_data/COP_investigations"):
     """
     X, Y : 2D meshgrids (η_turb, η_compr)
     Z    : 2D COP values on the same grid
     """
     _configure_matplotlib()      
     refrigerant = cycle_config["refrigerant"]
-    output_dir = Path("COP_investigations") / refrigerant
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = Path(output_dir) / refrigerant
+    output_path.mkdir(parents=True, exist_ok=True)
     cop_type = "COP_turb"
     cop_type_latex = _cop_type_to_latex(cop_type)
 
@@ -964,8 +964,8 @@ def make_COP_vs_eff_plot(X, Y, Z, cycle_config):
 
     # Save 
     fname2d = f"{cop_type}_vs_Efficiencies_{refrigerant}.pdf"
-    fig.savefig(output_dir / fname2d, dpi=1000, bbox_inches='tight')
-    logger.info(f"Saved: .\\COP_investigations\\{fname2d}")
+    fig.savefig(output_path / fname2d, dpi=1000, bbox_inches='tight')
+    logger.info(f"Saved: {output_path / fname2d}")
     plt.close(fig)
 
     # 3D surface
@@ -983,6 +983,58 @@ def make_COP_vs_eff_plot(X, Y, Z, cycle_config):
     ax3d.set_title(rf'$\mathrm{{3D}}\ {cop_type_latex}\ (\mathrm{{{refrigerant}}})$')
 
     fname3d = f"{cop_type}_vs_Efficiencies_{refrigerant}_3D.pdf"
-    fig3d.savefig(output_dir / fname3d, dpi=800, bbox_inches='tight')
-    logger.info(f"Saved: .\\COP_investigations\\{fname3d}")
+    fig3d.savefig(output_path / fname3d, dpi=800, bbox_inches='tight')
+    logger.info(f"Saved: {output_path / fname3d}")
     plt.close(fig3d)
+
+
+def make_PR_optimization_plot(
+    PR_values,
+    COP_values,
+    cycle_config,
+    output_dir="heat_pump_thermodynamic_diagrams",
+    best_PR=None,
+    best_COP=None,
+    verbose=True,
+):
+    """Save COP-vs-PR plot for all successful PR evaluations."""
+    if PR_values is None or COP_values is None:
+        return None
+
+    PR_arr = np.asarray(PR_values, dtype=float)
+    COP_arr = np.asarray(COP_values, dtype=float)
+    valid = np.isfinite(PR_arr) & np.isfinite(COP_arr)
+    if valid.sum() == 0:
+        return None
+
+    PR_arr = PR_arr[valid]
+    COP_arr = COP_arr[valid]
+    order = np.argsort(PR_arr)
+    PR_arr = PR_arr[order]
+    COP_arr = COP_arr[order]
+
+    _configure_matplotlib()
+    refrigerant = cycle_config["refrigerant"]
+    fig, ax = plt.subplots(figsize=(9.5, 7.0))
+
+    ax.plot(PR_arr, COP_arr, color="#1a3a6b", lw=1.2, zorder=2)
+    ax.scatter(PR_arr, COP_arr, color="#1a3a6b", s=10, zorder=3)
+
+    if best_PR is not None and best_COP is not None and np.isfinite(best_PR) and np.isfinite(best_COP):
+        ax.scatter([best_PR], [best_COP], color="#d64545", s=40, zorder=4,
+                   label=rf"$\mathrm{{Optimum}}: \mathrm{{PR}}={best_PR:.3f},\ { _cop_type_to_latex('COP_turb')}={best_COP:.3f}$")
+        ax.legend(loc="best", fontsize=9, framealpha=0.85)
+
+    ax.set_xlabel(r"$\mathrm{Pressure\ Ratio}\ [-]$")
+    ax.set_ylabel(r"$\mathrm{COP}_{\mathrm{turb}}\ [-]$")
+    ax.set_title(rf"$\mathrm{{PR\ Optimization\ Trace}}\ -\ \mathrm{{{refrigerant}}}$")
+    ax.grid(True, alpha=0.25)
+
+    output_root = Path(output_dir)
+    output_path = output_root / refrigerant / f"PR Optimization - {refrigerant}.pdf"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=1000, bbox_inches="tight")
+    if verbose:
+        logger.info(f"Saved: {output_path}")
+    plt.close(fig)
+    return fig

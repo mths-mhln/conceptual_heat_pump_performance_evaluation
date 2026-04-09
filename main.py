@@ -1,9 +1,8 @@
 import sys
-sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/')
-sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/verification/')
+sys.path.append('./verification/')
 
 from thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
-from visualization import make_thdy_plot, make_COP_vs_eff_plot, make_empty_thdy_plot
+from visualization import make_thdy_plot, make_COP_vs_eff_plot, make_empty_thdy_plot, make_PR_optimization_plot
 from config import cycle_config, general_config
 from verification import verification
 from logger import setup_logger
@@ -36,6 +35,14 @@ def main(perform_verification=True):
         logger.info("Evaluating conceptual heat pump cycle")
         cycle_data = solve_cycle(cycle_config, general_config, verbose=True)
         perf = compute_performance(cycle_data, cycle_config, general_config)
+        make_PR_optimization_plot(
+            cycle_data.get("PR_eval_values"),
+            cycle_data.get("COP_eval_values"),
+            cycle_config=cycle_config,
+            output_dir="heat_pump_thermodynamic_diagrams",
+            best_PR=cycle_data.get("PR"),
+            best_COP=perf.get("COP_turb"),
+        )
         table = Table(title=f"Conceptual Heat Pump Cycle - {cycle_config['refrigerant']}", show_lines=False)
         table.add_column("Symbol", style="cyan", no_wrap=True)
         table.add_column("Value", justify="right")
@@ -101,16 +108,20 @@ def main(perform_verification=True):
                     logger.warning(f"Failed at η_turb={X[i,j]:.3f}, η_compr={Y[i,j]:.3f}: {e}")
                 Z[i, j] = np.nan
         logger.info("Sweep completed. Saving data to file")
-        # Create output directory if it doesn't exist
-        output_dir = "COP_investigations"
-        os.makedirs(output_dir, exist_ok=True)
-        # Save the sweep data for recovery if plotting fails
         refrigerant = cycle_config["refrigerant"]
+        output_dir = os.path.join("00_obtained_data", "COP_investigations", refrigerant)
+        os.makedirs(output_dir, exist_ok=True)
         data_file = os.path.join(output_dir, f"COP_vs_eff_{refrigerant}_{cop_sweep_key}.npz")
         np.savez_compressed(data_file, X=X, Y=Y, Z=Z)
         logger.info(f"Data saved to {data_file}")
         logger.info("Generating heatmap + 3D surface")
-        make_COP_vs_eff_plot(X, Y, Z, cycle_config)  
+        make_COP_vs_eff_plot(
+            X,
+            Y,
+            Z,
+            cycle_config,
+            output_dir=os.path.join("00_obtained_data", "COP_investigations"),
+        )
         logger.info(f"{cop_sweep_key} vs efficiency investigation completed")
         
     elif analysis_type == "substance_thermodynamic_diagrams":
@@ -138,7 +149,7 @@ def main(perform_verification=True):
         )
 
 if __name__ == "__main__":
-    main(perform_verification=True)
+    main(perform_verification=False)
     end = timeit.default_timer()
     elapsed = end - start
     logger.info(f"Total execution time: {elapsed:.2f} seconds")
