@@ -34,6 +34,7 @@ def main(perform_verification=True):
     if analysis_type == "single_configuration":
         logger.info("Evaluating conceptual heat pump cycle")
         cycle_data = solve_cycle(cycle_config, general_config, verbose=True)
+        print(cycle_data)
         perf = compute_performance(cycle_data, cycle_config, general_config)
         make_PR_optimization_plot(
             cycle_data.get("PR_eval_values"),
@@ -149,7 +150,7 @@ def main(perform_verification=True):
         )
 
 if __name__ == "__main__":
-    main(perform_verification=False)
+    main(perform_verification=True)
     end = timeit.default_timer()
     elapsed = end - start
     logger.info(f"Total execution time: {elapsed:.2f} seconds")

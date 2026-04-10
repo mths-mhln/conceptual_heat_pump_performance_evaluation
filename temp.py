@@ -1,179 +1,132 @@
-"""
-Spinodal curve plotting with CoolProp
-Demonstrates two methods:
-  1. build_spinodal() via the low-level AbstractState interface (mixture-capable)
-  2. Manual rootfinding: locate where dP/drho|T = 0 along isotherms (pure fluids)
-"""
-
+from pathlib import Path
+import re
 import numpy as np
 import matplotlib.pyplot as plt
-import CoolProp.CoolProp as CP
-from CoolProp.CoolProp import AbstractState
 
-# ── Configuration ──────────────────────────────────────────────────────────────
-FLUID = "Water"          # change to any HEOS fluid, e.g. "CO2", "Propane"
-BACKEND = "HEOS"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# METHOD 1 — build_spinodal() (low-level interface, pure fluid treated as
-#             pseudo-mixture so the method resolves)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def get_spinodal_build(fluid, backend="HEOS"):
-    """
-    Use AbstractState.build_spinodal() + get_spinodal_data().
-    Returns arrays of (T [K], rho [kg/m³], P [Pa]).
-    """
-    AS = AbstractState(backend, fluid)
-    try:
-        AS.build_spinodal()
-        data = AS.get_spinodal_data()
-
-        # data contains reduced coordinates; convert back to SI
-        rho_r = AS.rhomass_critical()   # kg/m³
-        T_r   = AS.T_critical()         # K
-
-        tau_arr   = np.array(data.tau)    # τ = T_r / T
-        delta_arr = np.array(data.delta)  # δ = ρ / ρ_r
-
-        T_arr   = T_r / tau_arr
-        rho_arr = delta_arr * rho_r
-
-        # Compute P at each (T, rho) point
-        P_arr = []
-        for T_val, rho_val in zip(T_arr, rho_arr):
-            try:
-                AS.update(CP.DmassT_INPUTS, rho_val, T_val)
-                P_arr.append(AS.p())
-            except Exception:
-                P_arr.append(np.nan)
-
-        return T_arr, rho_arr, np.array(P_arr)
-
-    except Exception as e:
-        print(f"build_spinodal() failed: {e}")
-        return None, None, None
+from config import cycle_config
+from visualization import make_COP_vs_eff_plot
+from logger import setup_logger
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# METHOD 2 — Manual isotherm rootfinding: dP/drho|T = 0
-#             Works robustly for any pure HEOS fluid
-# ══════════════════════════════════════════════════════════════════════════════
-
-def dpdrho_T(AS, rho, T):
-    """Return dP/dρ|T at a given (ρ, T) using CoolProp's derivative interface."""
-    AS.update(CP.DmassT_INPUTS, rho, T)
-    return AS.first_partial_deriv(CP.iP, CP.iDmass, CP.iT)
+logger = setup_logger()
 
 
-def find_spinodal_manual(fluid, backend="HEOS", n_T=80):
-    """
-    For each isotherm between T_triple and T_critical, find the two densities
-    where dP/dρ|T = 0 (liquid spinodal and vapour spinodal).
-    Returns separate arrays for liquid and vapour branches.
-    """
-    AS = AbstractState(backend, fluid)
+def _parse_metadata_from_filename(file_path: Path):
+	"""Parse refrigerant and COP key from filename pattern.
 
-    T_c   = AS.T_critical()
-    rho_c = AS.rhomass_critical()
-
-    # Triple-point temperature (approximate lower bound)
-    T_min = AS.Tmin() + 1.0
-    T_max = T_c - 0.5   # stay just below critical point
-
-    T_vals = np.linspace(T_min, T_max, n_T)
-
-    liq_T, liq_rho, liq_P = [], [], []
-    vap_T, vap_rho, vap_P = [], [], []
-
-    from scipy.optimize import brentq
-
-    for T in T_vals:
-        try:
-            # Get saturation densities as bracket bounds
-            AS.update(CP.QT_INPUTS, 0.0, T)
-            rho_liq_sat = AS.rhomass()
-            AS.update(CP.QT_INPUTS, 1.0, T)
-            rho_vap_sat = AS.rhomass()
-
-            # ── Liquid spinodal: dP/dρ|T = 0 between rho_c and rho_liq_sat ──
-            rho_lo, rho_hi = rho_c * 1.01, rho_liq_sat * 0.999
-            if dpdrho_T(AS, rho_lo, T) * dpdrho_T(AS, rho_hi, T) < 0:
-                rho_sp = brentq(lambda r: dpdrho_T(AS, r, T), rho_lo, rho_hi)
-                AS.update(CP.DmassT_INPUTS, rho_sp, T)
-                liq_T.append(T);   liq_rho.append(rho_sp);  liq_P.append(AS.p())
-
-            # ── Vapour spinodal: dP/dρ|T = 0 between rho_vap_sat and rho_c ──
-            rho_lo, rho_hi = rho_vap_sat * 1.001, rho_c * 0.99
-            if dpdrho_T(AS, rho_lo, T) * dpdrho_T(AS, rho_hi, T) < 0:
-                rho_sp = brentq(lambda r: dpdrho_T(AS, r, T), rho_lo, rho_hi)
-                AS.update(CP.DmassT_INPUTS, rho_sp, T)
-                vap_T.append(T);   vap_rho.append(rho_sp);  vap_P.append(AS.p())
-
-        except Exception:
-            continue
-
-    return (np.array(liq_T),  np.array(liq_rho),  np.array(liq_P),
-            np.array(vap_T),  np.array(vap_rho),  np.array(vap_P))
+	Expected pattern:
+	COP_vs_eff_<refrigerant>_<cop_key>.npz
+	Example:
+	COP_vs_eff_R1234ze(E)_COP_turb.npz
+	"""
+	stem = file_path.stem
+	match = re.match(r"^COP_vs_eff_(.+)_(COP_.+)$", stem)
+	if not match:
+		raise ValueError(
+			f"Unsupported file naming format: {file_path.name}. "
+			"Expected COP_vs_eff_<refrigerant>_<cop_key>.npz"
+		)
+	refrigerant, cop_key = match.group(1), match.group(2)
+	return refrigerant, cop_key
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Saturation (binodal) curve for reference
-# ══════════════════════════════════════════════════════════════════════════════
+def replot_from_saved_data(
+	data_dir="COP_investigations/00_obtained_data",
+	output_dir="COP_investigations",
+):
+	"""Recreate COP-vs-eff plots from saved NPZ grids only."""
+	data_root = Path(data_dir)
+	if not data_root.exists():
+		raise FileNotFoundError(f"Data directory not found: {data_root}")
 
-def get_saturation_curve(fluid, backend="HEOS", n=200):
-    AS = AbstractState(backend, fluid)
-    T_c = AS.T_critical()
-    T_min = AS.Tmin() + 1.0
-    T_vals = np.linspace(T_min, T_c - 0.1, n)
+	files = sorted(data_root.glob("COP_vs_eff_*.npz"))
+	if not files:
+		raise FileNotFoundError(f"No COP sweep files found in: {data_root}")
 
-    liq_rho, vap_rho, liq_T, vap_T = [], [], [], []
-    for T in T_vals:
-        try:
-            AS.update(CP.QT_INPUTS, 0.0, T);  liq_rho.append(AS.rhomass()); liq_T.append(T)
-            AS.update(CP.QT_INPUTS, 1.0, T);  vap_rho.append(AS.rhomass()); vap_T.append(T)
-        except Exception:
-            continue
-    return np.array(liq_T), np.array(liq_rho), np.array(vap_T), np.array(vap_rho)
+	logger.info(f"Found {len(files)} saved COP sweep file(s) in {data_root}")
+
+	for file_path in files:
+		refrigerant, cop_key = _parse_metadata_from_filename(file_path)
+		logger.info(
+			f"Loading {file_path.name} (refrigerant={refrigerant}, sweep={cop_key})"
+		)
+
+		with np.load(file_path) as data:
+			X = data["X"]
+			Y = data["Y"]
+			Z = data["Z"]
+
+		cfg = dict(cycle_config)
+		cfg["refrigerant"] = refrigerant
+
+		# Uses the exact same plotting function/style as the original sweep workflow.
+		make_COP_vs_eff_plot(X, Y, Z, cfg, output_dir=output_dir)
+		logger.info(f"Replotted COP-vs-eff from saved data: {file_path.name}")
+
+	logger.info("All saved COP sweep plots regenerated successfully.")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Plot — T-ρ diagram
-# ══════════════════════════════════════════════════════════════════════════════
+def plot_side_by_side_contours(
+	data_dir="COP_investigations/00_obtained_data",
+	output_dir="COP_investigations/comparison",
+	refrigerants=("CO2", "R1234ze(E)"),
+):
+	"""Plot side-by-side COP contour plots for two refrigerants from saved NPZ data."""
+	data_root = Path(data_dir)
+	if not data_root.exists():
+		raise FileNotFoundError(f"Data directory not found: {data_root}")
 
-def plot_spinodal(fluid):
-    AS = AbstractState(BACKEND, fluid)
-    T_c, rho_c = AS.T_critical(), AS.rhomass_critical()
+	plot_data = []
+	for ref in refrigerants:
+		pattern = f"COP_vs_eff_{ref}_COP_*.npz"
+		matches = sorted(data_root.glob(pattern))
+		if not matches:
+			raise FileNotFoundError(
+				f"No stored COP sweep file found for {ref} in {data_root} "
+				f"with pattern {pattern}"
+			)
 
-    # Saturation curve
-    lT, lRho, vT, vRho = get_saturation_curve(fluid)
+		file_path = matches[0]
+		refrigerant, cop_key = _parse_metadata_from_filename(file_path)
+		with np.load(file_path) as data:
+			X = data["X"]
+			Y = data["Y"]
+			Z = data["Z"]
+		plot_data.append((refrigerant, cop_key, X, Y, Z, file_path.name))
 
-    # Spinodal via manual method (most reliable for pure fluids)
-    liq_T, liq_rho, _, vap_T, vap_rho, _ = find_spinodal_manual(fluid)
+	fig, axes = plt.subplots(1, 2, figsize=(16, 7.5), constrained_layout=True)
+	cop_label = r"$\mathrm{COP}_{\mathrm{turb}}$"
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+	for ax, (refrigerant, cop_key, X, Y, Z, source_name) in zip(axes, plot_data):
+		cf = ax.contourf(X, Y, Z, levels=30, cmap="viridis", extend="neither")
+		cl = ax.contour(X, Y, Z, levels=12, colors="black", linewidths=1.0, linestyles="-")
+		ax.clabel(cl, inline=True, fontsize=18, fmt="%.2f", colors="white", inline_spacing=4)
 
-    # Binodal
-    ax.plot(lRho, lT, 'b-',  lw=2, label='Binodal (sat. liquid)')
-    ax.plot(vRho, vT, 'b--', lw=2, label='Binodal (sat. vapour)')
+		cbar = fig.colorbar(cf, ax=ax, pad=0.02)
+		cbar.set_label(cop_label, fontsize=24)
+		cbar.ax.tick_params(labelsize=20)
 
-    # Spinodal
-    ax.plot(liq_rho, liq_T, 'r-',  lw=2, label='Spinodal (liquid branch)')
-    ax.plot(vap_rho, vap_T, 'r--', lw=2, label='Spinodal (vapour branch)')
+		ax.set_title(refrigerant, fontsize=26, fontweight="bold", pad=12)
+		ax.set_xlabel(r"$\eta_{\mathrm{turb}}$", fontsize=24)
+		ax.set_ylabel(r"$\eta_{\mathrm{compr}}$", fontsize=24)
+		ax.tick_params(axis="both", labelsize=20)
+		logger.info(f"Prepared contour subplot for {refrigerant} from {source_name} ({cop_key})")
 
-    # Critical point
-    ax.plot(rho_c, T_c, 'ko', ms=8, zorder=5, label=f'Critical point')
 
-    ax.set_xlabel(r'Density  $\rho$  [kg m$^{-3}$]')
-    ax.set_ylabel('Temperature  $T$  [K]')
-    ax.set_title(f'Binodal & Spinodal curves — {fluid}')
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f'spinodal_{fluid}.png', dpi=150)
-    plt.show()
-    print(f"Saved spinodal_{fluid}.png")
+
+	output_root = Path(output_dir)
+	output_root.mkdir(parents=True, exist_ok=True)
+	out_pdf = output_root / "COP_turb_contours_CO2_vs_R1234ze(E).pdf"
+	out_png = output_root / "COP_turb_contours_CO2_vs_R1234ze(E).png"
+
+	fig.savefig(out_pdf, dpi=1000, bbox_inches="tight")
+	fig.savefig(out_png, dpi=300, bbox_inches="tight")
+	plt.close(fig)
+
+	logger.info(f"Saved side-by-side contour comparison: {out_pdf}")
+	logger.info(f"Saved side-by-side contour comparison: {out_png}")
 
 
 if __name__ == "__main__":
-    plot_spinodal(FLUID)
+	replot_from_saved_data()
+	plot_side_by_side_contours()

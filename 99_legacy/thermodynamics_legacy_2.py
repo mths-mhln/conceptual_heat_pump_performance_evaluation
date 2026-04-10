@@ -276,8 +276,8 @@ def solve_cycle(cycle_config, general_config, verbose=True):
     if not "PR" in cycle_config: # cycle fully specified by pinch points (my preferred method)
         # Extract parameters from cycle_config
         refrigerant = cycle_config["refrigerant"]
-        T_h_in      = cycle_config["T_h_in"]
         T_c_in      = cycle_config["T_c_in"]
+        T_h_in      = cycle_config["T_h_in"]
         η_compr     = cycle_config["η_compr"]
         ΔT_pp_1     = cycle_config["ΔT_pp_1"]
         ΔT_pp_3     = cycle_config["ΔT_pp_3"]
@@ -285,7 +285,7 @@ def solve_cycle(cycle_config, general_config, verbose=True):
         ΔT_sh       = cycle_config["ΔT_sh"]
 
         # Station 1 — compressor inlet (fixed by user inputs)
-        T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+        T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
         p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
         p_ref_1 = p_ev
 
@@ -302,10 +302,10 @@ def solve_cycle(cycle_config, general_config, verbose=True):
             PR_guess = sum(PR_bisection_range) / 2
 
             # Station 1 - compressor inlet
-            T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+            T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
             p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
             p_ref_1 = p_ev
-            T_ref_1 = T_h_in - ΔT_pp_1
+            T_ref_1 = T_c_in - ΔT_pp_1
             h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
             s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
 
@@ -317,7 +317,7 @@ def solve_cycle(cycle_config, general_config, verbose=True):
             s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
             # Station 3 - turbine inlet
-            T_ref_3 = T_c_in + ΔT_pp_3
+            T_ref_3 = T_h_in + ΔT_pp_3
             p_ref_3 = p_ref_2
             s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
 
@@ -383,8 +383,8 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess, verbos
     """
     # Extract parameters from cycle_config
     refrigerant = cycle_config["refrigerant"]
-    T_h_in      = cycle_config["T_h_in"]
     T_c_in      = cycle_config["T_c_in"]
+    T_h_in      = cycle_config["T_h_in"]
     ṁ_h         = cycle_config["ṁ_h"]
     ṁ_c         = cycle_config["ṁ_c"]
     cp_h        = cycle_config["cp_h"]
@@ -401,15 +401,15 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess, verbos
     supercritical_cycle = False
 
     # Station 1 — compressor inlet (fixed by user inputs)
-    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     
     # Station 1
-    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
-    T_ref_1 = T_h_in - ΔT_pp_1
+    T_ref_1 = T_c_in - ΔT_pp_1
     h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
     s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
     Q_ref_1 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
@@ -423,7 +423,7 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess, verbos
     s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
     # Station 3 — turbine inlet
-    T_ref_3 = T_c_in + ΔT_pp_3
+    T_ref_3 = T_h_in + ΔT_pp_3
     p_ref_3 = p_ref_2
     h_ref_3 = _cp_props("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
     s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
@@ -480,23 +480,23 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess, verbos
     
     #Pinch-point 2 heat balance → ṁ_ref For non-supercritical cycle, one can assume that the superheating near ref_2 has a slope large enough for this method to make sense
     T_c_pp_2 = T_cond - ΔT_pp_2
-    ṁ_ref = ((T_c_pp_2 - T_c_in) * ṁ_c * cp_c /
+    ṁ_ref = ((T_c_pp_2 - T_h_in) * ṁ_c * cp_c /
             (Δh_cond * (Q_ref_2 - Q_ref_3) + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config)))
 
     # Outlet temperatures
-    T_c_out = T_c_in + (
+    T_h_out = T_h_in + (
         _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
         + (Q_ref_2 - Q_ref_3) * Δh_cond * ṁ_ref
         + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
     ) / (ṁ_c * cp_c)
 
-    T_h_out = T_h_in - (
+    T_c_out = T_c_in - (
         _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
         + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
         + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
     ) / (ṁ_h * cp_h)
 
-    T_h_pp_4 = _specific_heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref/ (ṁ_h * cp_h) + T_h_out
+    T_h_pp_4 = _specific_heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref/ (ṁ_h * cp_h) + T_c_out
     ΔT_pp_4_calculated = T_h_pp_4 - T_ev
 
     # store the thermodynamic cycle state in a dict
@@ -505,7 +505,7 @@ def evaluate_subcritical_cycle_pp(cycle_config, general_config, PR_guess, verbos
         p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
         p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
-        T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
+        T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_h_out=T_h_out, T_c_out=T_c_out,
         Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle,
         ΔT_pp_4_calculated=ΔT_pp_4_calculated
     )
@@ -525,8 +525,8 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess, verb
     """
     # Extract parameters from cycle_config
     refrigerant = cycle_config["refrigerant"]
-    T_h_in      = cycle_config["T_h_in"]
     T_c_in      = cycle_config["T_c_in"]
+    T_h_in      = cycle_config["T_h_in"]
     ṁ_h         = cycle_config["ṁ_h"]
     ṁ_c         = cycle_config["ṁ_c"]
     cp_h        = cycle_config["cp_h"]
@@ -543,15 +543,15 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess, verb
     supercritical_cycle = True
 
     # Station 1 — compressor inlet (fixed by user inputs)
-    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
 
     # Station 1
-    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
-    T_ref_1 = T_h_in - ΔT_pp_1
+    T_ref_1 = T_c_in - ΔT_pp_1
     h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
     s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
     Q_ref_1 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
@@ -565,7 +565,7 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess, verb
     s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
     # Station 3 — turbine inlet
-    T_ref_3 = T_c_in + ΔT_pp_3
+    T_ref_3 = T_h_in + ΔT_pp_3
     p_ref_3 = p_ref_2
     h_ref_3 = _cp_props("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
     s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
@@ -641,7 +641,7 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess, verb
             cycle_config,
             num_points=80,
         )
-        T_c_arr = T_c_in + (h_ref_arr - h_ref_3) * ṁ_ref_guess / (ṁ_c * cp_c)
+        T_c_arr = T_h_in + (h_ref_arr - h_ref_3) * ṁ_ref_guess / (ṁ_c * cp_c)
         T_diff_arr = T_ref_arr - T_c_arr
         negative_slope_points = np.where(np.diff(T_diff_arr) < 0)[0]
         # Rationale behind the if statement: see annotations.md statement 5.
@@ -677,15 +677,15 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess, verb
         return cycle_metadata, cycle_data
 
     # Outlet temperatures
-    T_c_out = T_c_in + _specific_heat_from_isobar_path(T_ref_3, T_ref_2, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
-    T_h_out = T_h_in - (
+    T_h_out = T_h_in + _specific_heat_from_isobar_path(T_ref_3, T_ref_2, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
+    T_c_out = T_c_in - (
         _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
         + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
         + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
     ) / (ṁ_h * cp_h)
 
     # evaluate heating stream at pinch point 4
-    T_h_pp_4 = _specific_heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_h * cp_h) + T_h_out
+    T_h_pp_4 = _specific_heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_h * cp_h) + T_c_out
     ΔT_pp_4_calculated = T_h_pp_4 - T_ev
 
     # store the thermodynamic cycle state in a dict
@@ -694,7 +694,7 @@ def evaluate_supercritical_cycle_pp(cycle_config, general_config, PR_guess, verb
         p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
         p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
-        T_ev=T_ev, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out, 
+        T_ev=T_ev, Δh_ev=Δh_ev, T_h_out=T_h_out, T_c_out=T_c_out, 
         Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2 = T_c_pp_2, supercritical_cycle=supercritical_cycle, 
         ΔT_pp_4_calculated=ΔT_pp_4_calculated
     )
@@ -714,8 +714,8 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config, verbose=True):
     """
     # Extract parameters from cycle_config
     refrigerant = cycle_config["refrigerant"]
-    T_h_in      = cycle_config["T_h_in"]
     T_c_in      = cycle_config["T_c_in"]
+    T_h_in      = cycle_config["T_h_in"]
     ṁ_h         = cycle_config["ṁ_h"]
     ṁ_c         = cycle_config["ṁ_c"]
     cp_h        = cycle_config["cp_h"]
@@ -732,15 +732,15 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config, verbose=True):
     supercritical_cycle = False
 
     # Station 1 — compressor inlet (fixed by user inputs)
-    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     
     # Station 1
-    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
-    T_ref_1 = T_h_in - ΔT_pp_1
+    T_ref_1 = T_c_in - ΔT_pp_1
     h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
     s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
     Q_ref_1 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
@@ -754,7 +754,7 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config, verbose=True):
     s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
     # Station 3 — turbine inlet
-    T_ref_3 = T_c_in + ΔT_pp_3
+    T_ref_3 = T_h_in + ΔT_pp_3
     p_ref_3 = p_ref_2
     h_ref_3 = _cp_props("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
     s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
@@ -803,23 +803,23 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config, verbose=True):
     
     # Pinch point 4 heat balance → ṁ_ref. For non-supercritical cycle, one can assume that the subcooling near ref_4 has a slope large enough for this method to make sense
     T_h_pp_4 = T_ev + ΔT_pp_4
-    ṁ_ref = ((T_h_in - T_h_pp_4) * ṁ_h * cp_h /
+    ṁ_ref = ((T_c_in - T_h_pp_4) * ṁ_h * cp_h /
             (Δh_ev * (Q_ref_1 - Q_ref_4) + _specific_heat_from_isobar_path(T_ev, T_ref_1, p_ref_1, general_config, cycle_config)))
 
     # Outlet temperatures
-    T_c_out = T_c_in + (
+    T_h_out = T_h_in + (
         _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
         + (Q_ref_2 - Q_ref_3) * Δh_cond * ṁ_ref
         + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
     ) / (ṁ_c * cp_c)
-    T_h_out = T_h_in - (
+    T_c_out = T_c_in - (
         _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
         + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
         + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
     ) / (ṁ_h * cp_h)
 
     # compute T_c_pp_2, necessary for plotting of the coolant flow on the T-s diagram. 
-    T_c_pp_2 = T_c_out - _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
+    T_c_pp_2 = T_h_out - _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
 
     # store the thermodynamic cycle state in a dict
     cycle_data = dict(
@@ -827,7 +827,7 @@ def evaluate_subcritical_cycle_PR(cycle_config, general_config, verbose=True):
         p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
         p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
-        T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
+        T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_h_out=T_h_out, T_c_out=T_c_out,
         Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
     )
     return cycle_data
@@ -840,8 +840,8 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config, verbose=True):
     """
     # Extract parameters from cycle_config
     refrigerant = cycle_config["refrigerant"]
-    T_h_in      = cycle_config["T_h_in"]
     T_c_in      = cycle_config["T_c_in"]
+    T_h_in      = cycle_config["T_h_in"]
     ṁ_h         = cycle_config["ṁ_h"]
     ṁ_c         = cycle_config["ṁ_c"]
     cp_h        = cycle_config["cp_h"]
@@ -858,15 +858,15 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config, verbose=True):
     supercritical_cycle = False
 
     # Station 1 — compressor inlet (fixed by user inputs)
-    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
     
     # Station 1
-    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
-    T_ref_1 = T_h_in - ΔT_pp_1
+    T_ref_1 = T_c_in - ΔT_pp_1
     h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
     s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
     Q_ref_1 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
@@ -880,7 +880,7 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config, verbose=True):
     s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
 
     # Station 3 — turbine inlet
-    T_ref_3 = T_c_in + ΔT_pp_3
+    T_ref_3 = T_h_in + ΔT_pp_3
     p_ref_3 = p_ref_2
     h_ref_3 = _cp_props("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
     s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
@@ -927,21 +927,21 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config, verbose=True):
     
     # Pinch point 4 heat balance → ṁ_ref. For non-supercritical cycle, one can assume that the subcooling near ref_4 has a slope large enough for this method to make sense
     T_h_pp_4 = T_ev + ΔT_pp_4
-    ṁ_ref = ((T_h_in - T_h_pp_4) * ṁ_h * cp_h /
+    ṁ_ref = ((T_c_in - T_h_pp_4) * ṁ_h * cp_h /
             (Δh_ev * (Q_ref_1 - Q_ref_4) + _specific_heat_from_isobar_path(T_ev, T_ref_1, p_ref_1, general_config, cycle_config)))
 
     # Outlet temperatures
-    T_c_out = T_c_in + (
+    T_h_out = T_h_in + (
         + _specific_heat_from_isobar_path(T_ref_3, T_ref_2, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
     ) / (ṁ_c * cp_c)
-    T_h_out = T_h_in - (
+    T_c_out = T_c_in - (
         _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
         + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
         + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
     ) / (ṁ_h * cp_h)
 
     # compute T_c_pp_2, necessary for plotting of the coolant flow on the T-s diagram. 
-    T_c_pp_2 = T_c_out - _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
+    T_c_pp_2 = T_h_out - _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
 
     # store the thermodynamic cycle state in a dict
     cycle_data = dict(
@@ -949,7 +949,7 @@ def evaluate_supercritical_cycle_PR(cycle_config, general_config, verbose=True):
         p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
         p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
         p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
-        T_ev=T_ev, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out,
+        T_ev=T_ev, Δh_ev=Δh_ev, T_h_out=T_h_out, T_c_out=T_c_out,
         Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2=T_c_pp_2, supercritical_cycle=supercritical_cycle
     )
     return cycle_data
@@ -962,13 +962,13 @@ def compute_performance(cycle_data, cycle_config, general_config):
     s = cycle_data
     ṁ_c = cycle_config["ṁ_c"]
     cp_c = cycle_config["cp_c"]
-    T_c_in = cycle_config["T_c_in"]
+    T_h_in = cycle_config["T_h_in"]
     ɳ_shaft = cycle_config["ɳ_shaft"]
     refrigerant = cycle_config["refrigerant"]
 
     Ẇ_turb = s["ṁ_ref"] * (s["h_ref_3"] - s["h_ref_4"])
     Ẇ_comp = s["ṁ_ref"] * (s["h_ref_2"] - s["h_ref_1"])
-    Q_out   = ṁ_c * cp_c * (s["T_c_out"] - T_c_in)
+    Q_out   = ṁ_c * cp_c * (s["T_h_out"] - T_h_in)
     Q_in    = s["ṁ_ref"] * _specific_heat_from_isobar_path(s["T_ref_1"], s["T_ev"], s["p_ref_1"], general_config, cycle_config, supercritical_cycle=s["supercritical_cycle"]) + \
               s["ṁ_ref"] * s["Δh_ev"] * (s["Q_ref_1"] - s["Q_ref_4"]) + \
               s["ṁ_ref"] * _specific_heat_from_isobar_path(s["T_ev"], s["T_ref_4"], s["p_ref_1"], general_config, cycle_config, supercritical_cycle=s["supercritical_cycle"])
@@ -998,8 +998,8 @@ def compute_performance(cycle_data, cycle_config, general_config):
 def build_ts_data(cycle_data, cycle_config, general_config):
     s = cycle_data
     refrigerant = cycle_config["refrigerant"]
-    T_c_in = cycle_config["T_c_in"]
     T_h_in = cycle_config["T_h_in"]
+    T_c_in = cycle_config["T_c_in"]
 
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
 
@@ -1053,7 +1053,7 @@ def build_ts_data(cycle_data, cycle_config, general_config):
     s_ref_23_v_inflection = _cp_props("S", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
     if s["Q_ref_2"] >= 1:
         s_pp_anchor = s_ref_23_v_inflection
-        s_c_out = s["s_ref_3"] + (s_pp_anchor - s["s_ref_3"]) / (s["T_c_pp_2"] - T_c_in) * (s["T_c_out"] - T_c_in)
+        s_c_out = s["s_ref_3"] + (s_pp_anchor - s["s_ref_3"]) / (s["T_c_pp_2"] - T_h_in) * (s["T_h_out"] - T_h_in)
     else:
         s_c_out = s["s_ref_2"]
 
@@ -1061,8 +1061,8 @@ def build_ts_data(cycle_data, cycle_config, general_config):
         major={"s": [s["s_ref_1"], s["s_ref_2"], s["s_ref_3"], s["s_ref_4"], s["s_ref_1"]],
                "T": [s["T_ref_1"], s["T_ref_2"], s["T_ref_3"], s["T_ref_4"], s["T_ref_1"]]},
         minor={"s": s_ref_lst, "T": T_ref_lst},
-        coolant={"s": [s["s_ref_3"], s_c_out], "T": [T_c_in, s["T_c_out"]]},
-        heating={"s": [s["s_ref_1"], s["s_ref_4"]], "T": [T_h_in, s["T_h_out"]]},
+        coolant={"s": [s["s_ref_3"], s_c_out], "T": [T_h_in, s["T_h_out"]]},
+        heating={"s": [s["s_ref_1"], s["s_ref_4"]], "T": [T_c_in, s["T_c_out"]]},
     )
 
 

@@ -168,8 +168,8 @@ def _check_second_derivative_sign(s_arr, T_arr):
 def solve_cycle(cycle_config, general_config):
     # Extract parameters from cycle_config
     refrigerant = cycle_config["refrigerant"]
-    T_h_in      = cycle_config["T_h_in"]
     T_c_in      = cycle_config["T_c_in"]
+    T_h_in      = cycle_config["T_h_in"]
     ṁ_h         = cycle_config["ṁ_h"]
     ṁ_c         = cycle_config["ṁ_c"]
     cp_h        = cycle_config["cp_h"]
@@ -183,7 +183,7 @@ def solve_cycle(cycle_config, general_config):
     ΔT_sh       = cycle_config["ΔT_sh"]
 
     # Station 1 — compressor inlet (fixed by user inputs)
-    T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+    T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_1 = p_ev
 
@@ -200,10 +200,10 @@ def solve_cycle(cycle_config, general_config):
     while not math.isclose(ΔT_pp_4_calculated, ΔT_pp_4, rel_tol=1e-3):
         # Note: continue statement is used in the loop!
         # Station 1
-        T_ev = T_h_in - ΔT_pp_1 - ΔT_sh
+        T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
         p_ev = PropsSI("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
         p_ref_1 = p_ev
-        T_ref_1 = T_h_in - ΔT_pp_1
+        T_ref_1 = T_c_in - ΔT_pp_1
         h_ref_1 = PropsSI("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
         s_ref_1 = PropsSI("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
         Q_ref_1 = _vapour_quality_scaler(PropsSI("Q", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}"))
@@ -231,7 +231,7 @@ def solve_cycle(cycle_config, general_config):
             supercritical_cycle = False
 
         # Station 3 — turbine inlet
-        T_ref_3 = T_c_in + ΔT_pp_3
+        T_ref_3 = T_h_in + ΔT_pp_3
         p_ref_3 = p_ref_2
         h_ref_3 = PropsSI("H", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
         s_ref_3 = PropsSI("S", "T", T_ref_3, "P", p_ref_3, f"REFPROP::{refrigerant}")
@@ -336,7 +336,7 @@ def solve_cycle(cycle_config, general_config):
         # Pinch-point 2 heat balance → ṁ_ref
         # For non-supercritical cycle, one can assume that the superheating near ref_2 has a slope large enough for this method to make sense
         # T_c_pp_2 = T_cond - ΔT_pp_2
-        # ṁ_ref = ((T_c_pp_2 - T_c_in) * ṁ_c * cp_c /
+        # ṁ_ref = ((T_c_pp_2 - T_h_in) * ṁ_c * cp_c /
         #         (Δh_cond * (Q_ref_2 - Q_ref_3) + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config)))
         # however there is a more universal, albeit more computationally intensive, iterative method. 
         # for supercritical cycles, specifying the pressure ratio makes more sense, but I will code this nonetheless
@@ -391,7 +391,7 @@ def solve_cycle(cycle_config, general_config):
                             heat_transferred += _specific_heat_from_isobar_path(T_ref, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref_guess
                     if supercritical_cycle:
                         heat_transferred += _specific_heat_from_isobar_path(T_ref_3, T_ref, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref_guess
-                    T_c_arr[i] = T_c_in + heat_transferred / (ṁ_c * cp_c)
+                    T_c_arr[i] = T_h_in + heat_transferred / (ṁ_c * cp_c)
                 T_diff_arr = T_ref_arr - T_c_arr
                 negative_slope_points = np.where(np.diff(T_diff_arr) < 0)[0]
                 # Bisection update
@@ -437,27 +437,27 @@ def solve_cycle(cycle_config, general_config):
 
         if not supercritical_cycle:
             T_c_pp_2 = T_cond - ΔT_pp_2
-            ṁ_ref = ((T_c_pp_2 - T_c_in) * ṁ_c * cp_c /
+            ṁ_ref = ((T_c_pp_2 - T_h_in) * ṁ_c * cp_c /
                     (Δh_cond * (Q_ref_2 - Q_ref_3) + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle)))
 
         # Outlet temperatures
         if supercritical_cycle:
-            T_c_out = T_c_in + _specific_heat_from_isobar_path(T_ref_3, T_ref_2, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
+            T_h_out = T_h_in + _specific_heat_from_isobar_path(T_ref_3, T_ref_2, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_c * cp_c)
         if not supercritical_cycle:
-            T_c_out = T_c_in + (
+            T_h_out = T_h_in + (
                 _specific_heat_from_isobar_path(T_ref_2, T_cond, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
                 + (Q_ref_2 - Q_ref_3) * Δh_cond * ṁ_ref
                 + _specific_heat_from_isobar_path(T_cond, T_ref_3, p_ref_2, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
             ) / (ṁ_c * cp_c)
 
-        T_h_out = T_h_in - (
+        T_c_out = T_c_in - (
             _specific_heat_from_isobar_path(T_ref_1, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
             + (Q_ref_1 - Q_ref_4) * Δh_ev * ṁ_ref
             + _specific_heat_from_isobar_path(T_ev, T_ref_4, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref
         ) / (ṁ_h * cp_h)
 
         # evaluate heating stream at pinch point 4
-        T_h_pp_4 = _specific_heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_h * cp_h) + T_h_out
+        T_h_pp_4 = _specific_heat_from_isobar_path(T_ref_4, T_ev, p_ref_1, general_config, cycle_config, supercritical_cycle=supercritical_cycle) * ṁ_ref / (ṁ_h * cp_h) + T_c_out
         ΔT_pp_4_calculated = T_h_pp_4 - T_ev
         # Bisection update
         # Reasoning: For the heating stream, the fixed value is the inlet temperature, depending on the refrigerant mass flow rate of the refrigerant, the 
@@ -479,7 +479,7 @@ def solve_cycle(cycle_config, general_config):
             p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
             p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
             p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
-            T_ev=T_ev, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out, 
+            T_ev=T_ev, Δh_ev=Δh_ev, T_h_out=T_h_out, T_c_out=T_c_out, 
             Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2 = T_c_pp_2, supercritical_cycle=supercritical_cycle
         )
     if not supercritical_cycle:
@@ -488,7 +488,7 @@ def solve_cycle(cycle_config, general_config):
             p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
             p_ref_3=p_ref_3, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3, Q_ref_3=Q_ref_3,
             p_ref_4=p_ref_4, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4,
-            T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_c_out=T_c_out, T_h_out=T_h_out, 
+            T_cond=T_cond, T_ev=T_ev, Δh_cond=Δh_cond, Δh_ev=Δh_ev, T_h_out=T_h_out, T_c_out=T_c_out, 
             Q_ref_4_isenth=Q_ref_4_isenth, ṁ_ref=ṁ_ref, T_c_pp_2 = T_c_pp_2, supercritical_cycle=supercritical_cycle
         )
     return state
@@ -501,20 +501,20 @@ def compute_performance(state, cycle_config, general_config):
     s = state
     ṁ_c = cycle_config["ṁ_c"]
     cp_c = cycle_config["cp_c"]
-    T_c_in = cycle_config["T_c_in"]
+    T_h_in = cycle_config["T_h_in"]
     ɳ_shaft = cycle_config["ɳ_shaft"]
     refrigerant = cycle_config["refrigerant"]
     # ṁ_h = cycle_config["ṁ_h"]
     # cp_h = cycle_config["cp_h"]
-    # T_h_in = cycle_config["T_h_in"]
+    # T_c_in = cycle_config["T_c_in"]
 
     Ẇ_turb = s["ṁ_ref"] * (s["h_ref_3"] - s["h_ref_4"])
     Ẇ_comp = s["ṁ_ref"] * (s["h_ref_2"] - s["h_ref_1"])
-    Q_out   = ṁ_c * cp_c * (s["T_c_out"] - T_c_in)
+    Q_out   = ṁ_c * cp_c * (s["T_h_out"] - T_h_in)
     Q_in    = s["ṁ_ref"] * _specific_heat_from_isobar_path(s["T_ref_1"], s["T_ev"], s["p_ref_1"], general_config, cycle_config, supercritical_cycle=s["supercritical_cycle"]) + \
               s["ṁ_ref"] * s["Δh_ev"] * (s["Q_ref_1"] - s["Q_ref_4"]) + \
               s["ṁ_ref"] * _specific_heat_from_isobar_path(s["T_ev"], s["T_ref_4"], s["p_ref_1"], general_config, cycle_config, supercritical_cycle=s["supercritical_cycle"])
-    # Q_in    = ṁ_h * cp_h * (T_h_in - s["T_h_out"])
+    # Q_in    = ṁ_h * cp_h * (T_c_in - s["T_c_out"])
     
     # isenthalpic Q_in
     Q_in_isenth = s["ṁ_ref"] * s["Δh_ev"] * (s["Q_ref_1"] - s["Q_ref_4_isenth"]) + \
@@ -546,8 +546,8 @@ def compute_performance(state, cycle_config, general_config):
 def build_ts_data(state, cycle_config, general_config):
     s = state
     refrigerant = cycle_config["refrigerant"]
-    T_c_in = cycle_config["T_c_in"]
     T_h_in = cycle_config["T_h_in"]
+    T_c_in = cycle_config["T_c_in"]
 
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
 
@@ -617,7 +617,7 @@ def build_ts_data(state, cycle_config, general_config):
     if s["Q_ref_2"] >= 1:
         # Point 2 is superheated: pp is at dew point, extrapolate s_c_out
         s_pp_anchor = s_ref_23_v_inflection
-        s_c_out = s["s_ref_3"] + (s_pp_anchor - s["s_ref_3"]) / (s["T_c_pp_2"] - T_c_in) * (s["T_c_out"] - T_c_in)
+        s_c_out = s["s_ref_3"] + (s_pp_anchor - s["s_ref_3"]) / (s["T_c_pp_2"] - T_h_in) * (s["T_h_out"] - T_h_in)
     else:
         # Point 2 is inside the dome: pp is at point 2 itself, no extrapolation
         s_c_out = s["s_ref_2"]
@@ -626,8 +626,8 @@ def build_ts_data(state, cycle_config, general_config):
         major={"s": [s["s_ref_1"], s["s_ref_2"], s["s_ref_3"], s["s_ref_4"], s["s_ref_1"]],
                "T": [s["T_ref_1"], s["T_ref_2"], s["T_ref_3"], s["T_ref_4"], s["T_ref_1"]]},
         minor={"s": s_ref_lst, "T": T_ref_lst},
-        coolant={"s": [s["s_ref_3"], s_c_out], "T": [T_c_in, s["T_c_out"]]},
-        heating={"s": [s["s_ref_1"], s["s_ref_4"]], "T": [T_h_in, s["T_h_out"]]},
+        coolant={"s": [s["s_ref_3"], s_c_out], "T": [T_h_in, s["T_h_out"]]},
+        heating={"s": [s["s_ref_1"], s["s_ref_4"]], "T": [T_c_in, s["T_c_out"]]},
     )
 
 

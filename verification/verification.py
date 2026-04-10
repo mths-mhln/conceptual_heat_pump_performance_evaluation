@@ -1,7 +1,9 @@
 import sys
-sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/')
+sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/05_conceptual_heat_pump_performance_evaluation/')
+sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/05_conceptual_heat_pump_performance_evaluation/verification/SOFTX-D-24-00232-main/scripts_and_examples/Python_examples')
 
 from thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
+from HP_CoolProp_example import MTW_HP_calculator
 from visualization import make_thdy_plot
 from logger import setup_logger
 import numpy as np
@@ -9,7 +11,7 @@ import warnings
 
 from rich.console import Console
 from rich.table import Table
-from verification_config import cycle_config_R1233zd_E, cycle_config_n_pentane, cycle_config_MM, general_config, MTW_cycle_performances, MTW_cycle
+from verification_config import cycle_config, general_config
 
 logger = setup_logger()
 console = Console()
@@ -52,19 +54,35 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
         table.add_column("Rel. Error", justify="right")
 
         overall_max_discrepancy = 0.0
-        for cycle_config in [cycle_config_R1233zd_E, cycle_config_n_pentane, cycle_config_MM]:  
+        for working_fluid in ["R1233zd(E)", "n-pentane", "MM"]:  
+            cycle_config["refrigerant"] = working_fluid
             logger.info(f"Evaluating conceptual heat pump cycle for refrigerant: {cycle_config['refrigerant']}")
             state = solve_cycle(cycle_config, general_config, verbose = False)
             perf = compute_performance(state, cycle_config, general_config)
+            MTW_cycle_config = {
+                "T_h_in": cycle_config["T_h_in"],
+                "T_c_in": cycle_config["T_c_in"],
+                "ṁ_c": cycle_config["ṁ_c"],
+                "cp_c": cycle_config["cp_c"],
+                "ṁ_h": cycle_config["ṁ_h"],
+                "cp_h": cycle_config["cp_h"],
+                "T_evap": state["T_ev"], #When using MTW code, I stick to MTW nomenclature, hence the difference in variable names
+                "PR": perf["PR"],
+                "dtsh": cycle_config["ΔT_sh"],
+                "dtsc": state["T_cond"] - state["T_ref_3"],
+                "T_co": state["T_c_out"],
+                "eta": cycle_config["η_compr"],
+                "refrigerant": cycle_config["refrigerant"]
+            }
+            MTW_cycle_performance_params, MTW_cycle_state_params = MTW_HP_calculator(MTW_cycle_config)
+
             max_discrepancy = _append_verification_rows(
                 table=table,
                 refrigerant=cycle_config["refrigerant"],
                 perf=perf,
-                mtw_perf=MTW_cycle_performances[cycle_config["refrigerant"]],
+                mtw_perf=MTW_cycle_performance_params[cycle_config["refrigerant"]],
             )
             overall_max_discrepancy = max(overall_max_discrepancy, max_discrepancy)
-            
-            verification_cycle_data = MTW_cycle[cycle_config["refrigerant"]]
             
             if generate_thdy_diagrams:
                 logger.info("Rendering T-S diagram")
@@ -75,7 +93,7 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                     cycle_config=cycle_config,
                     output_dir="verification/thermodynamic_diagrams",
                     ts_data=build_ts_data(state, cycle_config, general_config),
-                    verification_data=verification_cycle_data,
+                    verification_data=MTW_cycle_state_params[cycle_config["refrigerant"]],
                     verbose=True,
                 )
                 
@@ -87,7 +105,7 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                     cycle_config=cycle_config,
                     output_dir="verification/thermodynamic_diagrams",
                     ph_data=build_ph_data(state, cycle_config),
-                    verification_data=verification_cycle_data,
+                    verification_data=MTW_cycle_state_params[cycle_config["refrigerant"]],
                     verbose=True,
                 )
 
@@ -110,3 +128,6 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
 
 if __name__ == "__main__":
     verification()
+
+
+

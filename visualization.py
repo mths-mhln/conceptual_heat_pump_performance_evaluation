@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.lines import Line2D
+from matplotlib import patheffects
 from CoolProp.CoolProp import PropsSI
 from logger import setup_logger
 from pathlib import Path
@@ -476,6 +477,84 @@ def _add_expansion_lines(ax, cycle_data, diagram_type, cycle_config, include_ver
 
 
 
+# Cycle node labels (station numbers)
+# ====================================
+def _add_node_labels(ax, cycle_data, diagram_type):
+    """Add station number labels (1, 2, 3, 4) to the four cycle nodes.
+    
+    Station numbering (heat pump cycle):
+    - Station 1: Evaporator outlet (before compressor)
+    - Station 2: Compressor outlet
+    - Station 3: Condenser outlet (before expansion valve)
+    - Station 4: Expansion valve outlet (back to evaporator)
+    
+    Labels are positioned at bottom-right of each node with bold black text
+    and a semi-transparent white background for clarity.
+    """
+    node_positions = [
+        (cycle_data["s_ref_1"], cycle_data["T_ref_1"], cycle_data["h_ref_1"], cycle_data["p_ref_1"], "1"),
+        (cycle_data["s_ref_2"], cycle_data["T_ref_2"], cycle_data["h_ref_2"], cycle_data["p_ref_2"], "2"),
+        (cycle_data["s_ref_3"], cycle_data["T_ref_3"], cycle_data["h_ref_3"], cycle_data["p_ref_3"], "3"),
+        (cycle_data["s_ref_4"], cycle_data["T_ref_4"], cycle_data["h_ref_4"], cycle_data["p_ref_4"], "4"),
+    ]
+    
+    # Get axis limits for offset calculation
+    xl, xh = ax.get_xlim()
+    yl, yh = ax.get_ylim()
+    x_range = xh - xl
+    
+    # Small offset in fraction of axis range (right of the node, close to it)
+    x_offset_frac = 0.008
+    if diagram_type == "TS":
+        y_offset_frac = 0.012
+    else:  # PH diagram with log scale
+        y_offset_frac = 0.015
+    
+    if diagram_type == "TS":
+        # Use entropy and temperature
+        for s, T, _, _, station in node_positions:
+            if np.isfinite(s) and np.isfinite(T):
+                x_pos = s + x_offset_frac * x_range
+                if station in {"2", "3"}:
+                    y_pos = T + y_offset_frac * (yh - yl)
+                    valign = "bottom"
+                else:
+                    y_pos = T - y_offset_frac * (yh - yl)
+                    valign = "top"
+                
+                txt = ax.text(x_pos, y_pos, station,
+                             fontsize=12, fontweight='extra bold', color='black',
+                             ha='left', va=valign,
+                             zorder=13)
+                # Add white stroke for semi-transparent background effect
+                txt.set_path_effects([patheffects.Stroke(linewidth=3, foreground='white', alpha=0.7),
+                                     patheffects.Normal()])
+    else:  # PH diagram
+        # Use enthalpy and pressure
+        for _, _, h, p, station in node_positions:
+            if np.isfinite(h) and np.isfinite(p):
+                x_pos = h + x_offset_frac * x_range
+                # For log scale, offset in log space
+                log_yl, log_yh = np.log10(yl), np.log10(yh)
+                if station in {"2", "3"}:
+                    log_y = np.log10(p) + y_offset_frac * (log_yh - log_yl)
+                    valign = "bottom"
+                else:
+                    log_y = np.log10(p) - y_offset_frac * (log_yh - log_yl)
+                    valign = "top"
+                y_pos = 10 ** log_y
+                
+                txt = ax.text(x_pos, y_pos, station,
+                             fontsize=12, fontweight='bold', color='black',
+                             ha='left', va=valign,
+                             zorder=13)
+                # Add white stroke for semi-transparent background effect
+                txt.set_path_effects([patheffects.Stroke(linewidth=3, foreground='white', alpha=0.7),
+                                     patheffects.Normal()])
+
+
+
+
 # Arrow / endpoint label helpers (TS)
 # ===================================
 def _add_mid_arrow(ax, xv, yv, color, frac=0.18):
@@ -628,17 +707,19 @@ def _make_plot_ts(cycle_data, perf, ts_data, cycle_config, verification_data=Non
         include_verification=(verification_data is not None),
     )
 
-    for flow, col in [(ts_data["coolant"],"blue"),(ts_data["heating"],"red")]:
+    for flow, col in [(ts_data["coolant"],"red"),(ts_data["heating"],"blue")]:
         ax.plot(flow["s"], flow["T"], color=col, marker='o', markersize=2, zorder=12)
         _add_mid_arrow(ax, flow["s"], flow["T"], col)
     _add_endpoint_labels(ax, ts_data["coolant"]["s"], ts_data["coolant"]["T"],
-                         r"$T_{c,\mathrm{in}}$", r"$T_{c,\mathrm{out}}$", "blue", side=1)
+                         r"$T_{h,\mathrm{in}}$", r"$T_{h,\mathrm{out}}$", "red", side=1)
     _add_endpoint_labels(ax, ts_data["heating"]["s"], ts_data["heating"]["T"],
-                         r"$T_{h,\mathrm{in}}$", r"$T_{h,\mathrm{out}}$", "red",  side=-1)
+                         r"$T_{c,\mathrm{in}}$", r"$T_{c,\mathrm{out}}$", "blue",  side=-1)
+
+    # Add cycle node labels (station numbers 1-4)
+    _add_node_labels(ax, cycle_data, "TS")
 
     ax.set_xlabel(r"$s\ [\mathrm{J/kg/K}]$")
     ax.set_ylabel(r"$T\ [\mathrm{K}]$")
-    ax.set_title(rf"$\mathrm{{Conceptual\ Heat\ Pump\ Cycle}}\ -\ \mathrm{{{refrigerant}}}$")
     _draw_perf_box(ax, perf)
     fig.tight_layout()
     return fig
@@ -731,11 +812,13 @@ def _make_plot_ph(cycle_data, perf, ph_data, cycle_config, verification_data=Non
         include_verification=(verification_data is not None),
     )
 
+    # Add cycle node labels (station numbers 1-4)
+    _add_node_labels(ax, cycle_data, "PH")
+
     ax.set_xlabel(r"$h\ [\mathrm{kJ/kg}]$")
     ax.set_ylabel(r"$p\ [\mathrm{Pa}]$")
     ax.xaxis.set_major_formatter(
         ticker.FuncFormatter(lambda x, _: f"${x/1000:.0f}$"))
-    ax.set_title(rf"$\mathrm{{Conceptual\ Heat\ Pump\ Cycle}}\ -\ \mathrm{{{refrigerant}}}$")
     _draw_perf_box(ax, perf)
     fig.tight_layout()
     return fig
@@ -807,7 +890,6 @@ def _make_empty_plot_ts(cycle_config):
 
     ax.set_xlabel(r"$s\ [\mathrm{J/kg/K}]$")
     ax.set_ylabel(r"$T\ [\mathrm{K}]$")
-    ax.set_title(rf"$\mathrm{{Thermodynamic\ Diagram\ (TS)}}\ -\ \mathrm{{{refrigerant}}}$")
     fig.tight_layout()
     return fig
 
@@ -882,7 +964,6 @@ def _make_empty_plot_ph(cycle_config):
     ax.set_ylabel(r"$p\ [\mathrm{Pa}]$")
     ax.xaxis.set_major_formatter(
         ticker.FuncFormatter(lambda x, _: f"${x/1000:.0f}$"))
-    ax.set_title(rf"$\mathrm{{Thermodynamic\ Diagram\ (PH)}}\ -\ \mathrm{{{refrigerant}}}$")
     fig.tight_layout()
     return fig
 
@@ -959,7 +1040,6 @@ def make_COP_vs_eff_plot(X, Y, Z, cycle_config, output_dir="00_obtained_data/COP
 
     ax.set_xlabel(r'$\eta_{\mathrm{turb}}$')
     ax.set_ylabel(r'$\eta_{\mathrm{compr}}$')
-    ax.set_title(rf'${cop_type_latex}\ \mathrm{{vs}}\ \eta_{{\mathrm{{turb}}}},\ \eta_{{\mathrm{{compr}}}}\ (\mathrm{{{refrigerant}}})$')
     # ax.grid(True, alpha=0.3)
 
     # Save 
@@ -980,7 +1060,6 @@ def make_COP_vs_eff_plot(X, Y, Z, cycle_config, output_dir="00_obtained_data/COP
     ax3d.set_xlabel(r'$\eta_{\mathrm{turb}}$')
     ax3d.set_ylabel(r'$\eta_{\mathrm{compr}}$')
     ax3d.set_zlabel(rf'${cop_type_latex}$')
-    ax3d.set_title(rf'$\mathrm{{3D}}\ {cop_type_latex}\ (\mathrm{{{refrigerant}}})$')
 
     fname3d = f"{cop_type}_vs_Efficiencies_{refrigerant}_3D.pdf"
     fig3d.savefig(output_path / fname3d, dpi=800, bbox_inches='tight')
@@ -1027,7 +1106,6 @@ def make_PR_optimization_plot(
 
     ax.set_xlabel(r"$\mathrm{Pressure\ Ratio}\ [-]$")
     ax.set_ylabel(r"$\mathrm{COP}_{\mathrm{turb}}\ [-]$")
-    ax.set_title(rf"$\mathrm{{PR\ Optimization\ Trace}}\ -\ \mathrm{{{refrigerant}}}$")
     ax.grid(True, alpha=0.25)
 
     output_root = Path(output_dir)

@@ -3,7 +3,7 @@ The original version is readily available through
 - https://pockettherm.github.io/
 - https://github.com/ElsevierSoftwareX/SOFTX-D-24-00232/tree/main
 - https://doi.org/10.1016/j.softx.2024.101806
-And a local copy can be found through D:\nexus\02_learning\00_university_education\04_MSc_TUDelft\05_thesis_nexus\02_resources\03_everything_software\03_pocketTHERM
+And a local copy [can be found through .\05_thesis_nexus\02_resources\03_everything_software\03_pocketTHERM
 
 The edited version can be found in the same folder. 
 
