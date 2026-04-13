@@ -1,3 +1,6 @@
+import sys
+sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/05_conceptual_heat_pump_performance_evaluation/')
+
 from pathlib import Path
 import re
 import numpy as np
@@ -97,19 +100,20 @@ def plot_side_by_side_contours(
 	fig, axes = plt.subplots(1, 2, figsize=(16, 7.5), constrained_layout=True)
 	cop_label = r"$\mathrm{COP}_{\mathrm{turb}}$"
 
-	for ax, (refrigerant, cop_key, X, Y, Z, source_name) in zip(axes, plot_data):
+	for idx, (ax, (refrigerant, cop_key, X, Y, Z, source_name)) in enumerate(zip(axes, plot_data)):
 		cf = ax.contourf(X, Y, Z, levels=30, cmap="viridis", extend="neither")
 		cl = ax.contour(X, Y, Z, levels=12, colors="black", linewidths=1.0, linestyles="-")
-		ax.clabel(cl, inline=True, fontsize=18, fmt="%.2f", colors="white", inline_spacing=4)
+		ax.clabel(cl, inline=True, fontsize=20, fmt="%.2f", colors="white", inline_spacing=4)
 
 		cbar = fig.colorbar(cf, ax=ax, pad=0.02)
 		cbar.set_label(cop_label, fontsize=24)
-		cbar.ax.tick_params(labelsize=20)
+		cbar.ax.tick_params(labelsize=22)
 
-		ax.set_title(refrigerant, fontsize=26, fontweight="bold", pad=12)
+		panel_label = f"({chr(ord('a') + idx)})"
+		ax.set_title(f"{panel_label} {refrigerant}", fontsize=26, fontweight="bold", pad=12)
 		ax.set_xlabel(r"$\eta_{\mathrm{turb}}$", fontsize=24)
 		ax.set_ylabel(r"$\eta_{\mathrm{compr}}$", fontsize=24)
-		ax.tick_params(axis="both", labelsize=20)
+		ax.tick_params(axis="both", labelsize=22)
 		logger.info(f"Prepared contour subplot for {refrigerant} from {source_name} ({cop_key})")
 
 

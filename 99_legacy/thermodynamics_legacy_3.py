@@ -374,10 +374,10 @@ def solve_cycle(cycle_config, general_config, verbose=True):
     # Any supercritical point with p2 ∈ (Pcrit, Pcrit × critical_buffer_ratio]
     # is treated as infeasible → optimiser automatically selects the
     # second global maximum (the first physically reliable peak). This was
-    # necessary due to unreasonable behavior near the critical point by CoolProp.
-    critical_buffer_ratio = float(cycle_config.get("near_critical_buffer_ratio", 1.05))
-    if critical_buffer_ratio <= 1.0:
-        raise ValueError("'near_critical_buffer_ratio' must be > 1.0")
+    # necessary due to unreasonable behavior near the critical point by CoolProp
+    critical_buffer_ratio = 1.05          # 5% above critical pressure
+                                            # Increase to 1.08–1.10 for more conservative
+                                            # behaviour near critical point.
     Pcrit = _cp_props("Pcrit", f"REFPROP::{refrigerant}")
     PR_crit = Pcrit / p_ev
     PR_buffer = (Pcrit * critical_buffer_ratio) / p_ev

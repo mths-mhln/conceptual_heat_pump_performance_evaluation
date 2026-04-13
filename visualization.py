@@ -21,11 +21,12 @@ def _configure_matplotlib():
     plt.rcParams.update({
         "text.usetex": True,
         "font.family": "serif",
-        "font.serif": ["Computer Modern Roman"],
+        "font.serif": ["Utopia"],
         "text.latex.preamble": (
             r"\usepackage[T1]{fontenc}"
             r"\usepackage{lmodern}"
             r"\usepackage{siunitx}"
+            r"\usepackage{bm}"
             r"\sisetup{group-separator={\,},group-minimum-digits=4}"
         ),
     })
@@ -374,7 +375,7 @@ def _label_point(ax, x_data, y_data, frac, yscale='linear'):
 
 def _put_label(ax, x_val, y_val, ang, label, color):
     ax.text(x_val, y_val, label,
-            color=color, fontsize=7, rotation=ang, rotation_mode='anchor',
+            color=color, fontsize=10, rotation=ang, rotation_mode='anchor',
             ha='center', va='center',
             bbox=dict(facecolor='white', edgecolor='none', alpha=0.65, pad=0.2),
             zorder=6, clip_on=True)
@@ -467,7 +468,7 @@ def _add_expansion_lines(ax, cycle_data, diagram_type, cycle_config, include_ver
 
     leg = ax.legend(handles=handles,
                     loc="lower right", bbox_to_anchor=(0.9875, 0.015),
-                    fontsize=8, framealpha=0.85)
+                    fontsize=10, framealpha=0.85)
     fr = leg.get_frame()
     fr.set_facecolor((0.96, 0.92, 0.84, 0.72))
     fr.set_edgecolor('#9C7B53')
@@ -582,7 +583,7 @@ def _add_endpoint_labels(ax, xv, yv, lbl0, lbl1, color, side=1):
     for lbl, pt, sgn in [(lbl0,(xv[0],yv[0]),-1),(lbl1,(xv[1],yv[1]),1)]:
         off = nor*6. + sgn*tan*15.
         ax.annotate(lbl, xy=pt, xytext=(off[0],off[1]),
-                    textcoords='offset points', fontsize=8, color=color,
+                    textcoords='offset points', fontsize=10, color=color,
                     ha='center', va='center',
                     bbox=dict(facecolor='white', edgecolor='none', alpha=0.65, pad=0.2),
                     zorder=6, clip_on=True)
@@ -600,13 +601,115 @@ def _draw_perf_box(ax, perf):
         rf"\mathrm{{COP_{{isenth}}}} & \num{{{perf['COP_isenth']:.2f}}} & [-] \\"
         rf"\dot{{W}}_{{turb}}        & \num{{{perf['Ẇ_turb']:.0f}}}     & [\mathrm{{W}}] \\"
         rf"\dot{{W}}_{{compr}}       & \num{{{perf['Ẇ_comp']:.0f}}}     & [\mathrm{{W}}] \\"
-        rf"\dot{{Q}}_{{in,turb}}     & \num{{{perf['Q_in']:.0f}}}       & [\mathrm{{W}}]"
+        rf"\dot{{Q}}_{{out}}     & \num{{{perf['Q_out']:.0f}}}       & [\mathrm{{W}}]"
         rf"\end{{array}}$"
     )
     ax.text(0.03, 0.96, txt, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', zorder=10,
             bbox=dict(facecolor=(0.96,0.92,0.84,0.72), edgecolor='#9C7B53',
                       linewidth=1.2, boxstyle='round,pad=0.5'))
+
+
+def _compute_turbine_expansion_curve(cycle_data, cycle_config, n=220):
+    """Compute a curved expansion path using h(p)=h3-eta*(h3-h_is(p))."""
+    eta_turb = cycle_config.get("η_turb", None)
+    if eta_turb is None:
+        return None
+
+    p3 = cycle_data["p_ref_3"]
+    p4 = cycle_data["p_ref_4"]
+    h3 = cycle_data["h_ref_3"]
+    s3 = cycle_data["s_ref_3"]
+
+    p_arr = np.linspace(p3, p4, n)
+    h_arr = np.full_like(p_arr, np.nan, dtype=float)
+    s_arr = np.full_like(p_arr, np.nan, dtype=float)
+    T_arr = np.full_like(p_arr, np.nan, dtype=float)
+
+    for i, p in enumerate(p_arr):
+        try:
+            h_is = _q("H", "P", p, "S", s3, cycle_config=cycle_config)
+            if not np.isfinite(h_is):
+                continue
+            h = h3 - eta_turb * (h3 - h_is)
+            h_arr[i] = h
+            s_arr[i] = _q("S", "P", p, "H", h, cycle_config=cycle_config)
+            T_arr[i] = _q("T", "P", p, "H", h, cycle_config=cycle_config)
+        except Exception:
+            pass
+
+    valid = np.isfinite(p_arr) & np.isfinite(h_arr) & np.isfinite(s_arr) & np.isfinite(T_arr)
+    if valid.sum() < 3:
+        return None
+    return p_arr[valid], h_arr[valid], s_arr[valid], T_arr[valid]
+
+
+def _find_expansion_segment_index(x_arr, y_arr, x3, y3, x4, y4):
+    """Find index i where segment i->i+1 corresponds to 3->4 in minor arrays."""
+    x = np.asarray(x_arr)
+    y = np.asarray(y_arr)
+    if len(x) < 2:
+        return None
+
+    tol_x3 = 1e-6 * max(1.0, abs(x3))
+    tol_y3 = 1e-6 * max(1.0, abs(y3))
+    tol_x4 = 1e-6 * max(1.0, abs(x4))
+    tol_y4 = 1e-6 * max(1.0, abs(y4))
+
+    for i in range(len(x) - 1):
+        is_3 = (abs(x[i] - x3) <= tol_x3) and (abs(y[i] - y3) <= tol_y3)
+        is_4 = (abs(x[i + 1] - x4) <= tol_x4) and (abs(y[i + 1] - y4) <= tol_y4)
+        if is_3 and is_4:
+            return i
+    return None
+
+
+def _plot_cycle_with_curved_expansion_ts(ax, cycle_data, ts_data, cycle_config):
+    """Plot cycle minor path but replace straight 3->4 with curved expansion."""
+    x = np.asarray(ts_data["minor"]["s"])
+    y = np.asarray(ts_data["minor"]["T"])
+    idx = _find_expansion_segment_index(
+        x,
+        y,
+        cycle_data["s_ref_3"],
+        cycle_data["T_ref_3"],
+        cycle_data["s_ref_4"],
+        cycle_data["T_ref_4"],
+    )
+    curve = _compute_turbine_expansion_curve(cycle_data, cycle_config)
+
+    if idx is None or curve is None:
+        ax.plot(x, y, color='green', lw=1.5, zorder=7)
+        return
+
+    p_arr, h_arr, s_curve, T_curve = curve
+    ax.plot(x[:idx + 1], y[:idx + 1], color='green', lw=1.5, zorder=7)
+    ax.plot(s_curve, T_curve, color='green', lw=1.5, zorder=7)
+    ax.plot(x[idx + 1:], y[idx + 1:], color='green', lw=1.5, zorder=7)
+
+
+def _plot_cycle_with_curved_expansion_ph(ax, cycle_data, ph_data, cycle_config):
+    """Plot cycle minor path but replace straight 3->4 with curved expansion."""
+    x = np.asarray(ph_data["minor"]["h"])
+    y = np.asarray(ph_data["minor"]["p"])
+    idx = _find_expansion_segment_index(
+        x,
+        y,
+        cycle_data["h_ref_3"],
+        cycle_data["p_ref_3"],
+        cycle_data["h_ref_4"],
+        cycle_data["p_ref_4"],
+    )
+    curve = _compute_turbine_expansion_curve(cycle_data, cycle_config)
+
+    if idx is None or curve is None:
+        ax.plot(x, y, color='green', lw=1.5, zorder=7)
+        return
+
+    p_curve, h_curve, s_arr, T_arr = curve
+    ax.plot(x[:idx + 1], y[:idx + 1], color='green', lw=1.5, zorder=7)
+    ax.plot(h_curve, p_curve, color='green', lw=1.5, zorder=7)
+    ax.plot(x[idx + 1:], y[idx + 1:], color='green', lw=1.5, zorder=7)
 
 
 
@@ -677,8 +780,7 @@ def _make_plot_ts(cycle_data, perf, ts_data, cycle_config, verification_data=Non
     # Cycle
     ax.scatter(ts_data["major"]["s"], ts_data["major"]["T"],
                color='orange', marker='o', s=5, zorder=8)
-    ax.plot(ts_data["minor"]["s"], ts_data["minor"]["T"],
-            color='green', lw=1.5, zorder=7)
+    _plot_cycle_with_curved_expansion_ts(ax, cycle_data, ts_data, cycle_config)
 
     # Verification/reference cycle (if provided)
     if verification_data is not None:
@@ -720,6 +822,7 @@ def _make_plot_ts(cycle_data, perf, ts_data, cycle_config, verification_data=Non
 
     ax.set_xlabel(r"$s\ [\mathrm{J/kg/K}]$")
     ax.set_ylabel(r"$T\ [\mathrm{K}]$")
+    ax.tick_params(axis='both', which='major', labelsize=12)
     _draw_perf_box(ax, perf)
     fig.tight_layout()
     return fig
@@ -785,8 +888,7 @@ def _make_plot_ph(cycle_data, perf, ph_data, cycle_config, verification_data=Non
     # Cycle
     ax.scatter(ph_data["major"]["h"], ph_data["major"]["p"],
                color='orange', marker='o', s=5, zorder=8)
-    ax.plot(ph_data["minor"]["h"], ph_data["minor"]["p"],
-            color='green', lw=1.5, zorder=7)
+    _plot_cycle_with_curved_expansion_ph(ax, cycle_data, ph_data, cycle_config)
 
     # Verification/reference cycle (if provided)
     if verification_data is not None:
@@ -817,8 +919,9 @@ def _make_plot_ph(cycle_data, perf, ph_data, cycle_config, verification_data=Non
 
     ax.set_xlabel(r"$h\ [\mathrm{kJ/kg}]$")
     ax.set_ylabel(r"$p\ [\mathrm{Pa}]$")
+    ax.tick_params(axis='both', which='major', labelsize=12)
     ax.xaxis.set_major_formatter(
-        ticker.FuncFormatter(lambda x, _: f"${x/1000:.0f}$"))
+        ticker.FuncFormatter(lambda x, _: rf"$\bm{{{x/1000:.0f}}}$"))
     _draw_perf_box(ax, perf)
     fig.tight_layout()
     return fig

@@ -1,0 +1,170 @@
+% Concise project summary snippet for thesis report
+% You can \input{report_code_summary.tex} in your main .tex document.
+
+\section{Conceptual Heat Pump Model With Turbine Expansion}
+
+\textbf{Objective.} The objective of this code is to quantify \textbf{how much system COP can increase} when replacing throttling losses with a \textbf{turbine expander} and mechanical work recovery.
+
+\subsection{Modelling Approach}
+
+The implementation solves a steady-state vapor-compression heat pump cycle with turbine expansion, pinch-point constraints, and performance post-processing. Thermophysical properties are evaluated with \textbf{CoolProp/REFPROP}. For each candidate pressure ratio, cycle feasibility is checked and COP is evaluated.
+
+\textbf{Key assumptions}
+\begin{itemize}
+\item Steady-state, 1D component model.
+\item Fixed component efficiencies: $\eta_{\mathrm{compr}}$, $\eta_{\mathrm{turb}}$, and shaft efficiency $\eta_{\mathrm{shaft}}$.
+\item Pinch constraints enforced via $\Delta T_{\mathrm{pp},1}$, $\Delta T_{\mathrm{pp},3}$, and $\Delta T_{\mathrm{pp},4}$.
+\item Mass flow rate of refrigerant determined from the evaporator-side energy balance.
+\item Subcritical and supercritical operating regions both handled, with a near-critical buffer to avoid numerically unreliable states.
+\end{itemize}
+
+\textbf{Block diagram (code workflow)}
+
+\textit{(Requires in preamble: \texttt{\textbackslash usepackage\{tikz\}} and
+\texttt{\textbackslash usetikzlibrary\{arrows.meta,positioning,shapes.geometric\}}.)}
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}[
+	node distance=1.25cm and 1.8cm,
+	>=Latex,
+	block/.style={draw, rounded corners, align=left, text width=0.28\textwidth, inner sep=6pt, font=\footnotesize},
+	decision/.style={draw, diamond, aspect=2.0, align=center, text width=0.18\textwidth, inner sep=2pt, font=\footnotesize},
+	line/.style={-Latex, thick}
+]
+
+\node[block] (in) {
+\textbf{Inputs / configuration}\\
+$\{T_{h,in},\,T_{c,in},\,\dot m_h,\,\dot m_c,\,c_{p,h},\,c_{p,c},\,\eta_{\mathrm{compr}},\,\eta_{\mathrm{turb}},\,\eta_{\mathrm{shaft}},\\
+\Delta T_{\mathrm{pp},1},\,\Delta T_{\mathrm{pp},3},\,\Delta T_{\mathrm{pp},4},\,\Delta T_{\mathrm{sh}},\,\text{refrigerant}\}$
+};
+
+\node[decision, right=of in] (mode) {\textbf{Fixed $PR$?}};
+
+\node[block, above right=0.35cm and 1.7cm of mode] (eval) {
+\textbf{Cycle evaluation for candidate $PR$}\\
+Solve stations $1\rightarrow2\rightarrow3\rightarrow4$:\\
+$\{p_i,T_i,h_i,s_i,Q_i\}$ from CoolProp/REFPROP.
+};
+
+\node[block, below right=0.35cm and 1.7cm of mode] (obj) {
+\textbf{Objective function $f(PR)$}\\
+$f(PR)=-COP_{\mathrm{turb}}$ with infeasibility penalty.
+};
+
+\node[block, right=of eval] (checks) {
+\textbf{Feasibility checks}\\
+Pinch constraints: $\Delta T_{\min}\geq\Delta T_{\mathrm{pp},3}$,\\
+physical checks (quality/state validity),\\
+near-critical buffer for robust optimization.
+};
+
+\node[block, right=of obj] (opt) {
+\textbf{PR optimization}\\
+Bounded search in subcritical and safe-supercritical intervals;\\
+select $PR^*=\arg\max(COP_{\mathrm{turb}})$ among feasible solutions.
+};
+
+\node[block, right=of checks] (perf) {
+\textbf{Performance post-processing}\\
+Compute $\dot W_{\mathrm{compr}},\,\dot W_{\mathrm{turb}},\,\dot Q_{out},\\
+COP_{\mathrm{turb}},\,COP_{\mathrm{is}},\,COP_{\mathrm{isenth}}$.
+};
+
+\node[block, below=1.1cm of perf] (out) {
+\textbf{Outputs}\\
+Best cycle state set, selected $PR$, COP metrics, and TS/PH plotting data.
+};
+
+\draw[line] (in) -- (mode);
+\draw[line] (mode) -- node[above, font=\scriptsize] {yes} (eval);
+\draw[line] (mode) -- node[below, font=\scriptsize] {no} (obj);
+\draw[line] (eval) -- (checks);
+\draw[line] (checks) -- (perf);
+\draw[line] (obj) -- (opt);
+\draw[line] (opt) |- (perf);
+\draw[line] (perf) -- (out);
+
+\end{tikzpicture}
+\caption{\textbf{Detailed workflow of the turbine-assisted heat pump model and pressure-ratio handling.}}
+\end{figure}
+
+\subsection{Verification}
+
+The implementation is verified against the model of \textbf{Martin T. White (PocketTHERM / SoftwareX)}. The reported agreement is within \textbf{0.01\% maximum relative error}. This supports correctness of the implemented cycle equations and property-coupled solution workflow.
+
+\subsection{Cycle Input Case Used in Report (R1234ze(E))}
+
+\begin{table}[h!]
+\centering
+\caption{\textbf{Cycle input parameters for the reported R1234ze(E) case}.}
+\begin{tabular}{lll}
+\hline
+\textbf{Parameter} & \textbf{Value} & \textbf{Unit} \\
+\hline
+Refrigerant & R1234ze(E) & -- \\
+$T_{h,in}$ & 353.15 & K \\
+$T_{c,in}$ & 287.15 & K \\
+$\dot m_h$ & 42 & kg/s \\
+$c_{p,h}$ & 1885 & J/(kg\,K) \\
+$\dot m_c$ & 40 & kg/s \\
+$c_{p,c}$ & 1006 & J/(kg\,K) \\
+$\eta_{\mathrm{compr}}$ & 0.78 & -- \\
+$\eta_{\mathrm{turb}}$ & 0.87 & -- \\
+$\eta_{\mathrm{shaft}}$ & 0.98 & -- \\
+$\Delta T_{\mathrm{pp},1}$ & 10 & K \\
+$\Delta T_{\mathrm{pp},3}$ & 10 & K \\
+$\Delta T_{\mathrm{pp},4}$ & 10 & K \\
+$\Delta T_{\mathrm{sh}}$ & 5 & K \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Cycle Input Case Used for CO2 Analyses}
+
+\begin{table}[h!]
+\centering
+\caption{\textbf{Cycle input parameters used for CO2 analyses}.}
+\begin{tabular}{lll}
+\hline
+\textbf{Parameter} & \textbf{Value} & \textbf{Unit} \\
+\hline
+Refrigerant & CO2 & -- \\
+$T_{h,in}$ & 276 & K \\
+$T_{c,in}$ & 240 & K \\
+$\dot m_h$ & 42 & kg/s \\
+$c_{p,h}$ & 1885 & J/(kg\,K) \\
+$\dot m_c$ & 80 & kg/s \\
+$c_{p,c}$ & 1006 & J/(kg\,K) \\
+$\eta_{\mathrm{compr}}$ & 0.78 & -- \\
+$\eta_{\mathrm{turb}}$ & 0.87 & -- \\
+$\eta_{\mathrm{shaft}}$ & 0.98 & -- \\
+$\Delta T_{\mathrm{pp},1}$ & 10 & K \\
+$\Delta T_{\mathrm{pp},3}$ & 10 & K \\
+$\Delta T_{\mathrm{pp},4}$ & 3 & K \\
+$\Delta T_{\mathrm{sh}}$ & 5 & K \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Cycle COP Results (R1234ze(E) Case)}
+
+\begin{table}[h!]
+\centering
+\caption{\textbf{Computed performance results for the R1234ze(E) case}.}
+\begin{tabular}{lll}
+\hline
+\textbf{Metric} & \textbf{Value} & \textbf{Unit} \\
+\hline
+Optimized pressure ratio $PR$ & \textbf{12.684} & -- \\
+$COP_{\mathrm{turb}}$ & \textbf{2.690} & -- \\
+$COP_{\mathrm{is}}$ & 2.875 & -- \\
+$COP_{\mathrm{isenth}}$ & 1.879 & -- \\
+$\dot Q_{out}$ & 318492 & W \\
+$\dot W_{compr}$ & 169529 & W \\
+$\dot W_{turb}$ & 52171 & W \\
+\hline
+\end{tabular}
+\end{table}
+
+\textbf{Interpretation.} The model predicts a substantial COP uplift potential when turbine work recovery is included, while satisfying the imposed pinch constraints.

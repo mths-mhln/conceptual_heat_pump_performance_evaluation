@@ -74,7 +74,13 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                 "eta": cycle_config["η_compr"],
                 "refrigerant": cycle_config["refrigerant"]
             }
-            MTW_cycle_performance_params, MTW_cycle_state_params = MTW_HP_calculator(MTW_cycle_config)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=RuntimeWarning,
+                    message=r"invalid value encountered in scalar divide",
+                )
+                MTW_cycle_performance_params, MTW_cycle_state_params = MTW_HP_calculator(MTW_cycle_config)
 
             max_discrepancy = _append_verification_rows(
                 table=table,

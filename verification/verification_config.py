@@ -37,7 +37,7 @@ cycle_config = {
     "ΔT_pp_3": ΔT_pp_3,
     "ΔT_pp_4": ΔT_pp_4,
     "ΔT_sh": ΔT_sh,
-    "ɳ_shaft": ɳ_shaft,
+    "ɳ_shaft": ɳ_shaft
 }
 
 

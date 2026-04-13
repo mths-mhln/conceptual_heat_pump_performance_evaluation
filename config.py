@@ -8,7 +8,7 @@ analysis_type = "single_configuration"  # "single_configuration", "COP_vs_eff_in
 
 
 # refrigerant selection - depending on specification different specifications are necessary
-refrigerant = "MM"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "CO2"
+refrigerant = "R1234ze(E)"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "CO2"
 
 
 
@@ -33,22 +33,56 @@ if refrigerant != "CO2":
     ΔT_pp_4 = 10                # [K] - pinch point 4
     ΔT_sh = 5                   # [K] - superheat
     ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
+    near_critical_buffer_ratio = 1.05   # [-] thermodynamic properties near the critical point can be unreliable, hence I force the 
+                                        # optimizer to stay away from this region
+
+# if refrigerant != "CO2":
+#     T_h_in = 276             # [K] - 80 degC  353.15
+#     T_c_in = 240             # [K] - 15 degC (outside temp)
+#     ṁ_h = 42                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
+#     cp_h = 1885                 # [J/kg/K] - steam at 250 degrees
+#     ṁ_c = 40                    # [kg/s] - arbitrarily chosen
+#     cp_c = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
+#     η_turb = 0.87               # [-] - from turbine maps
+#     η_compr = 0.78              # [-] - from compressor maps
+#     ΔT_pp_1 = 10                # [K] - pinch point 1
+#     ΔT_pp_3 = 10                # [K] - pinch point 3
+#     ΔT_pp_4 = 3                # [K] - pinch point 4
+#     ΔT_sh = 5                   # [K] - superheat
+#     ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
+
+# if refrigerant == "CO2":
+#     T_h_in = 276             # [K] - 80 degC  353.15
+#     T_c_in = 240             # [K] - 15 degC (outside temp)
+#     ṁ_h = 42                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
+#     cp_h = 1885                 # [J/kg/K] - steam at 250 degrees
+#     ṁ_c = 80                    # [kg/s] - arbitrarily chosen
+#     cp_c = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
+#     η_turb = 0.87               # [-] - from turbine maps
+#     η_compr = 0.78              # [-] - from compressor maps
+#     ΔT_pp_1 = 10                # [K] - pinch point 1
+#     ΔT_pp_3 = 10                # [K] - pinch point 3
+#     ΔT_pp_4 = 3                # [K] - pinch point 4
+#     ΔT_sh = 5                   # [K] - superheat
+#     ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
 
 if refrigerant == "CO2":
-    T_h_in = 276             # [K] - 80 degC  353.15
-    T_c_in = 240             # [K] - 15 degC (outside temp)
+    T_h_in = 300             # [K] - 80 degC  353.15
+    T_c_in = 280             # [K] - 15 degC (outside temp)
     ṁ_h = 42                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
     cp_h = 1885                 # [J/kg/K] - steam at 250 degrees
     ṁ_c = 80                    # [kg/s] - arbitrarily chosen
     cp_c = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
     η_turb = 0.87               # [-] - from turbine maps
     η_compr = 0.78              # [-] - from compressor maps
-    ΔT_pp_1 = 10                # [K] - pinch point 1
-    ΔT_pp_3 = 10                # [K] - pinch point 3
+    ΔT_pp_1 = 3                # [K] - pinch point 1
+    ΔT_pp_3 = 3                # [K] - pinch point 3
     ΔT_pp_4 = 3                # [K] - pinch point 4
     ΔT_sh = 5                   # [K] - superheat
     ɳ_shaft = 0.98              # [-] - turbine/compressor shaft connection efficiency
-    
+    near_critical_buffer_ratio = 1.05  # [-] thermodynamic properties near the critical point can be unreliable, hence I force the
+                                        # optimizer to stay away from this region
+
 cycle_config = {
     "T_h_in": T_h_in,
     "T_c_in": T_c_in,
@@ -63,7 +97,8 @@ cycle_config = {
     "ΔT_pp_4": ΔT_pp_4,
     "ΔT_sh": ΔT_sh,
     "ɳ_shaft": ɳ_shaft,
-    "refrigerant": refrigerant,
+    "near_critical_buffer_ratio": near_critical_buffer_ratio,
+    "refrigerant": refrigerant
 }
 
 
@@ -78,8 +113,8 @@ if analysis_type == "single_configuration":
         "ignore_coolprop_warnings": True,
         "ts_margin_s_left": 0.2,
         "ts_margin_s_right": 0.2,
-        "ts_margin_T_bot": 0.2,
-        "ts_margin_T_top": 0.25, # 0.15
+        "ts_margin_T_bot": 0.25,
+        "ts_margin_T_top": 0.35, # 0.15
         "ph_margin_h_left": 0.3,
         "ph_margin_h_right": 0.15,
         "ph_margin_p_bot": 0.1,

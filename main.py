@@ -110,7 +110,7 @@ def main(perform_verification=True):
                 Z[i, j] = np.nan
         logger.info("Sweep completed. Saving data to file")
         refrigerant = cycle_config["refrigerant"]
-        output_dir = os.path.join("00_obtained_data", "COP_investigations", refrigerant)
+        output_dir = os.path.join("COP_investigations", refrigerant)
         os.makedirs(output_dir, exist_ok=True)
         data_file = os.path.join(output_dir, f"COP_vs_eff_{refrigerant}_{cop_sweep_key}.npz")
         np.savez_compressed(data_file, X=X, Y=Y, Z=Z)
@@ -121,7 +121,7 @@ def main(perform_verification=True):
             Y,
             Z,
             cycle_config,
-            output_dir=os.path.join("00_obtained_data", "COP_investigations"),
+            output_dir=os.path.join("COP_investigations", "00_obtained_data"),
         )
         logger.info(f"{cop_sweep_key} vs efficiency investigation completed")
         

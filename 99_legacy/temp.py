@@ -1,20 +1,17 @@
 """
 Problem Encountered:
-- the optimizer pushes to the lowest possible ṁ_ref to satisfy the pinch constraints, which leads to near-zero cooling capacity, which is not meaningful for the COP improvements possible 
+- the optimizer pushes to the lowest possible ṁ_ref to satisfy the pinch constraints, which leads to near-zero cooling capacity, which is not meaningful for the COP improvements possible
   in typical heat pump systems that we will actually build. Connected to this is the optimizer's desire to place the pinch points at ref_1 and re_3, which is made possible by the low ṁ_ref.
     - reason: the optimizer aims for largest COP = (h2-h3) + Δh_cond / (h2-h1). Which is largest the lowest possible we keep the PR. See notes on paper, but this happens if the ṁ_ref
-      is so small that your pp near 2' (the inflection point) is nearly the same ΔT (but slightly smaller) than you experience for ref_3. For the evaporation, the lowest PR is achieved by 
+      is so small that your pp near 2' (the inflection point) is nearly the same ΔT (but slightly smaller) than you experience for ref_3. For the evaporation, the lowest PR is achieved by
       placing the pp at ref_1. Note that this is very similar behavior to the brayton cycle where if we try to maximize the cycle on our metric of η_th, we end up with a super thin cycle
-      that maximizes the cooling curve, at the expense of the cycle not doing any actual net work, simply because that metric accounts for one of the heating curves and one of the work curves. 
-      This is also the reason why for the HP cycle, no subcooling will be present, since that is thermodynamically unfavorable (you press for larger PR for very little heating enthalpy gain). 
-    - The underlying reason for why this is thermodyanmically feasible is because the varaition in thdy properties is simply as represented on the map. That is how our reality functions. 
+      that maximizes the cooling curve, at the expense of the cycle not doing any actual net work, simply because that metric accounts for one of the heating curves and one of the work curves.
+      This is also the reason why for the HP cycle, no subcooling will be present, since that is thermodynamically unfavorable (you press for larger PR for very little heating enthalpy gain).
+    - The underlying reason for why this is thermodyanmically feasible is because the varaition in thdy properties is simply as represented on the map. That is how our reality functions.
     - For this reason, instead of a fully general optimization, you can account for the fact that the optimizer will push for the PP to occur at T_ref1 and T_pp_2 anyway by simply placing the pp
-      there from the start. However, you can of course never be fully sure that this is the best option, what about subcooling, what about supercritical cycles. Hence I will just leave this as is, 
-      implement th feedback of Carlo and be done with this shit tbh. 
+      there from the start. However, you can of course never be fully sure that this is the best option, what about subcooling, what about supercritical cycles. Hence I will just leave this as is,
+      implement th feedback of Carlo and be done with this shit tbh.
 """
-
-
-
 import sys
 sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/')
 sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/verification/')
@@ -24,24 +21,19 @@ import numpy as np
 import CoolProp.CoolProp as CP
 import scipy.optimize as opt
 from logger import setup_logger
-
 logger = setup_logger()
-
 _ABSTRACT_STATES = {}
-
 def _parse_backend_fluid(fluid_spec):
     if "::" in fluid_spec:
         backend, fluid = fluid_spec.split("::", 1)
         return backend, fluid
     return "REFPROP", fluid_spec
-
 def _get_abstract_state(fluid_spec):
     backend, fluid = _parse_backend_fluid(fluid_spec)
     key = (backend, fluid)
     if key not in _ABSTRACT_STATES:
         _ABSTRACT_STATES[key] = CP.AbstractState(backend, fluid)
     return _ABSTRACT_STATES[key]
-
 def _update_state_from_pair(state, in1, val1, in2, val2):
     pair = (in1, in2)
     if pair == ("P", "T"):
@@ -66,7 +58,6 @@ def _update_state_from_pair(state, in1, val1, in2, val2):
         state.update(CP.PSmass_INPUTS, val2, val1)
     else:
         raise NotImplementedError(f"Unsupported input pair for AbstractState: {pair}")
-
 def _cp_props(*args):
     """AbstractState-backed PropsSI replacement for this module.
     Supports the signatures used in this file:
@@ -102,10 +93,8 @@ def _cp_props(*args):
         raise TypeError("PropsSI wrapper received unsupported signature")
     except RuntimeError as err:
         raise ValueError(str(err)) from err
-
 # Helpers
 # =======
-
 def _vapour_quality_scaler(Q):
     """Clamp CoolProp quality to [0, 1] for single-phase regions."""
     if Q > 1:
@@ -113,7 +102,6 @@ def _vapour_quality_scaler(Q):
     elif Q < 0:
         return 0
     return Q
-
 def _isobar_segment(s_start, s_end, p, cycle_config, general_config):
     """Return (s_range, T_range) along a constant-pressure path (TS diagram)."""
     resolution = general_config["resolution"]
@@ -127,13 +115,11 @@ def _isobar_segment(s_start, s_end, p, cycle_config, general_config):
         except ValueError:
             pass
     return s_range.tolist(), T_range.tolist()
-
 def _isobar_h_segment(h_start, h_end, p):
     """Return (h_range, p_range) along a constant-pressure path (PH diagram)."""
     h_range = np.linspace(h_start, h_end, num=30)
     p_range = np.full(30, p)
     return h_range.tolist(), p_range.tolist()
-
 def _specific_heat_from_isobar_path(
     T_start, T_end, p, general_config, cycle_config, supercritical_cycle=False, uniform_sampling=False,
 ):
@@ -156,7 +142,6 @@ def _specific_heat_from_isobar_path(
         except ValueError:
             pass
     return heat
-
 def _sample_isobar_ts_uniform_arc(h_start, h_end, p, cycle_config, num_points=2000):
     refrigerant = cycle_config["refrigerant"]
     n = max(num_points, 400)
@@ -190,7 +175,6 @@ def _sample_isobar_ts_uniform_arc(h_start, h_end, p, cycle_config, num_points=20
     s_uniform = np.interp(arc_uniform, arc, s_valid)
     h_uniform = np.interp(arc_uniform, arc, h_valid)
     return s_uniform, T_uniform, h_uniform
-
 def _check_second_derivative_sign(s_arr, T_arr):
     dT_ds = np.gradient(T_arr, s_arr)
     d2T_ds2 = np.gradient(dT_ds, s_arr)
@@ -200,9 +184,8 @@ def _check_second_derivative_sign(s_arr, T_arr):
         return -1
     else:
         return 0
-
 # New helpers for true minimum approach (counter-flow pinch anywhere)
-def _compute_min_approach_cond(ṁ_ref, h_ref_2, h_ref_3, p_ref_2, T_c_in, cp_c, ṁ_c, refrigerant):
+def _compute_min_approach_cond(ṁ_ref, h_ref_2, h_ref_3, p_ref_2, T_h_in, cp_h, ṁ_h, refrigerant):
     if ṁ_ref <= 0:
         return np.inf
     Q_cond = ṁ_ref * (h_ref_2 - h_ref_3)
@@ -215,13 +198,12 @@ def _compute_min_approach_cond(ṁ_ref, h_ref_2, h_ref_3, p_ref_2, T_c_in, cp_c,
         try:
             state.update(CP.HmassP_INPUTS, h, p_ref_2)
             T_ref = state.T()
-            T_ext = T_c_in + q / (ṁ_c * cp_c)
+            T_ext = T_h_in + q / (ṁ_h * cp_h)
             delta_t[i] = T_ref - T_ext
         except:
             pass
     return np.nanmin(delta_t)
-
-def _compute_min_approach_evap(ṁ_ref, h_ref_4, h_ref_1, p_ref_1, T_h_in, cp_h, ṁ_h, refrigerant):
+def _compute_min_approach_evap(ṁ_ref, h_ref_4, h_ref_1, p_ref_1, T_c_in, cp_c, ṁ_c, refrigerant):
     if ṁ_ref <= 0:
         return np.inf
     Q_evap = ṁ_ref * (h_ref_1 - h_ref_4)
@@ -234,12 +216,11 @@ def _compute_min_approach_evap(ṁ_ref, h_ref_4, h_ref_1, p_ref_1, T_h_in, cp_h,
         try:
             state.update(CP.HmassP_INPUTS, h, p_ref_1)
             T_ref = state.T()
-            T_ext = T_h_in - (Q_evap - q) / (ṁ_h * cp_h)
+            T_ext = T_c_in - (Q_evap - q) / (ṁ_c * cp_c)
             delta_t[i] = T_ext - T_ref
         except:
             pass
     return np.nanmin(delta_t)
-
 def _find_max_mref(compute_min_approach, target_delta, bounds=(1e-3, 100), tol=1e-6):
     low, high = bounds
     while high - low > tol:
@@ -249,79 +230,83 @@ def _find_max_mref(compute_min_approach, target_delta, bounds=(1e-3, 100), tol=1
         else:
             high = mid
     return low
-
 # Cycle solver (FULL OPTIMISATION as requested)
 def solve_cycle(cycle_config, general_config, verbose=True):
-    """Full optimisation over PR, T_ref_1 and T_ref_3.
+    """Full optimisation over PR, T_ref_1 and T_ref_3 with FIXED heating capacity.
+   
     - Maximises specific COP = (h2-h3) / w_net_per_kg
-    - Pinch points are strict inequality constraints (min ΔT anywhere ≥ ΔT_pp_min_xxx)
-    - End temperature differences are allowed to be larger than the minimum (the optimiser will choose the best trade-off)
-    - Only the two physically meaningful pinch constraints are used.
+    - Equality constraint: Q_out = Q_out_req  (provided in cycle_config)
+    - Pinch points are now *strict* inequality constraints evaluated at the
+      exact ṁ_ref required by the capacity target.
     """
     refrigerant = cycle_config["refrigerant"]
-    T_h_in = cycle_config["T_h_in"]
     T_c_in = cycle_config["T_c_in"]
-    ṁ_h = cycle_config["ṁ_h"]
+    T_h_in = cycle_config["T_h_in"]
     ṁ_c = cycle_config["ṁ_c"]
-    cp_h = cycle_config["cp_h"]
+    ṁ_h = cycle_config["ṁ_h"]
     cp_c = cycle_config["cp_c"]
+    cp_h = cycle_config["cp_h"]
     η_compr = cycle_config["η_compr"]
     η_turb = cycle_config["η_turb"]
     ΔT_sh = cycle_config["ΔT_sh"]
     ΔT_pp_min_evap = cycle_config["ΔT_pp_min_evap"]
     ΔT_pp_min_cond = cycle_config["ΔT_pp_min_cond"]
-
+    # === NEW: required heating capacity (W) =================================
+    Q_out_req = cycle_config.get("Q_out_req")
+    if Q_out_req is None:
+        raise ValueError("cycle_config must contain 'Q_out_req' (positive value in W)")
+    if Q_out_req <= 0:
+        raise ValueError("Q_out_req must be > 0")
     def objective(x):
         PR, T_ref_1, T_ref_3 = x
-        if PR <= 1.0 or T_ref_1 > T_h_in - ΔT_pp_min_evap + 1e-3 or T_ref_3 < T_c_in + ΔT_pp_min_cond - 1e-3:
+        if (PR <= 1.0 or
+            T_ref_1 > T_c_in - ΔT_pp_min_evap + 1e-3 or
+            T_ref_3 < T_h_in + ΔT_pp_min_cond - 1e-3):
             return 1e6
         try:
             T_ev = T_ref_1 - ΔT_sh
             p_ref_1 = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
             p_ref_2 = PR * p_ref_1
-
             # Station 1
             h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
             s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-
             # Station 2
             h2_is = _cp_props("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
             h_ref_2 = h_ref_1 + (h2_is - h_ref_1) / η_compr
-
-            # Station 3 (free)
+            # Station 3
             h_ref_3 = _cp_props("H", "T", T_ref_3, "P", p_ref_2, f"REFPROP::{refrigerant}")
             s_ref_3 = _cp_props("S", "T", T_ref_3, "P", p_ref_2, f"REFPROP::{refrigerant}")
-
             # Station 4
             h4_is = _cp_props("H", "P", p_ref_1, "S", s_ref_3, f"REFPROP::{refrigerant}")
             h_ref_4 = h_ref_3 - η_turb * (h_ref_3 - h4_is)
-
             q_out_per = h_ref_2 - h_ref_3
             w_net_per = (h_ref_2 - h_ref_1) - (h_ref_3 - h_ref_4) * cycle_config.get("ɳ_shaft", 1.0)
             if w_net_per <= 0 or q_out_per <= 0:
                 return 1e6
-
-            # Feasibility check (pinch inequality)
-            def min_app_evap(mr):
-                return _compute_min_approach_evap(mr, h_ref_4, h_ref_1, p_ref_1, T_h_in, cp_h, ṁ_h, refrigerant)
-            def min_app_cond(mr):
-                return _compute_min_approach_cond(mr, h_ref_2, h_ref_3, p_ref_2, T_c_in, cp_c, ṁ_c, refrigerant)
-
-            mref_max_evap = _find_max_mref(min_app_evap, ΔT_pp_min_evap)
-            mref_max_cond = _find_max_mref(min_app_cond, ΔT_pp_min_cond)
-
-            if mref_max_evap < 1e-6 or mref_max_cond < 1e-6:
+            # === NEW: equality constraint on capacity =======================
+            mref_req = Q_out_req / q_out_per
+            if mref_req <= 0:
                 return 1e6
-
-            return -(q_out_per / w_net_per)   # negative for maximisation
+            # Check pinch at *exactly* the required mass flow
+            min_app_evap_val = _compute_min_approach_evap(
+                mref_req, h_ref_4, h_ref_1, p_ref_1,
+                T_c_in, cp_c, ṁ_c, refrigerant
+            )
+            min_app_cond_val = _compute_min_approach_cond(
+                mref_req, h_ref_2, h_ref_3, p_ref_2,
+                T_h_in, cp_h, ṁ_h, refrigerant
+            )
+            if (min_app_evap_val < ΔT_pp_min_evap or
+                min_app_cond_val < ΔT_pp_min_cond):
+                return 1e6
+            return -(q_out_per / w_net_per)   # maximise specific COP
         except Exception:
             return 1e6
-
     # Global optimisation (3 variables)
     bounds = [
         (1.01, 30),                                      # PR
-        (T_h_in - 150, T_h_in - ΔT_pp_min_evap),         # T_ref_1 (can be lower → larger ΔT at station 1)
-        (T_c_in + ΔT_pp_min_cond, T_c_in + 150)          # T_ref_3 (can be higher → larger ΔT at station 3)
+        (T_c_in - 150, T_c_in - ΔT_pp_min_evap),        # T_ref_1
+        (T_h_in + ΔT_pp_min_cond, T_h_in + 150)         # T_ref_3
     ]
     res = opt.differential_evolution(
         objective,
@@ -332,61 +317,45 @@ def solve_cycle(cycle_config, general_config, verbose=True):
         workers=1,
         disp=False
     )
-
     if res.fun >= 0:
-        raise ValueError("No feasible cycle found that satisfies the pinch constraints.")
-
+        raise ValueError("No feasible cycle found that satisfies the pinch constraints "
+                         "at the requested Q_out_req.")
     optimal_PR, optimal_T_ref_1, optimal_T_ref_3 = res.x
     if verbose:
-        logger.info(f"Optimal PR = {optimal_PR:.4f} | Optimal T_ref_1 = {optimal_T_ref_1:.2f} K (ΔT_end_evap possibly > min) | "
-                    f"Optimal T_ref_3 = {optimal_T_ref_3:.2f} K (ΔT_end_cond possibly > min) | Max COP = {-res.fun:.4f}")
-
-    # Re-build full states with optimal values
+        logger.info(f"Optimal PR = {optimal_PR:.4f} | Optimal T_ref_1 = {optimal_T_ref_1:.2f} K | "
+                    f"Optimal T_ref_3 = {optimal_T_ref_3:.2f} K | Max specific COP = {-res.fun:.4f} | "
+                    f"Q_out_req = {Q_out_req:.2f} W")
+    # Re-build full states with optimal values (identical to original)
     T_ev = optimal_T_ref_1 - ΔT_sh
     p_ref_1 = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     p_ref_2 = optimal_PR * p_ref_1
-
     h_ref_1 = _cp_props("H", "T", optimal_T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
     s_ref_1 = _cp_props("S", "T", optimal_T_ref_1, "P", p_ref_1, f"REFPROP::{refrigerant}")
-
     h2_is = _cp_props("H", "P", p_ref_2, "S", s_ref_1, f"REFPROP::{refrigerant}")
     h_ref_2 = h_ref_1 + (h2_is - h_ref_1) / η_compr
     T_ref_2 = _cp_props("T", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
     Q_ref_2 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}"))
     s_ref_2 = _cp_props("S", "P", p_ref_2, "H", h_ref_2, f"REFPROP::{refrigerant}")
-
     h_ref_3 = _cp_props("H", "T", optimal_T_ref_3, "P", p_ref_2, f"REFPROP::{refrigerant}")
     s_ref_3 = _cp_props("S", "T", optimal_T_ref_3, "P", p_ref_2, f"REFPROP::{refrigerant}")
     Q_ref_3 = _vapour_quality_scaler(_cp_props("Q", "T", optimal_T_ref_3, "P", p_ref_2, f"REFPROP::{refrigerant}"))
-
     h4_is = _cp_props("H", "P", p_ref_1, "S", s_ref_3, f"REFPROP::{refrigerant}")
     h_ref_4 = h_ref_3 - η_turb * (h_ref_3 - h4_is)
     T_ref_4 = _cp_props("T", "P", p_ref_1, "H", h_ref_4, f"REFPROP::{refrigerant}")
     Q_ref_4 = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_1, "H", h_ref_4, f"REFPROP::{refrigerant}"))
     Q_ref_4_isenth = _vapour_quality_scaler(_cp_props("Q", "P", p_ref_1, "H", h_ref_3, f"REFPROP::{refrigerant}"))
     s_ref_4 = _cp_props("S", "P", p_ref_1, "H", h_ref_4, f"REFPROP::{refrigerant}")
-
     supercritical_cycle = p_ref_2 > _cp_props("Pcrit", f"REFPROP::{refrigerant}")
-
-    # Final feasible ṁ_ref
-    def min_app_evap(mr):
-        return _compute_min_approach_evap(mr, h_ref_4, h_ref_1, p_ref_1, T_h_in, cp_h, ṁ_h, refrigerant)
-    def min_app_cond(mr):
-        return _compute_min_approach_cond(mr, h_ref_2, h_ref_3, p_ref_2, T_c_in, cp_c, ṁ_c, refrigerant)
-
-    mref_max_evap = _find_max_mref(min_app_evap, ΔT_pp_min_evap)
-    mref_max_cond = _find_max_mref(min_app_cond, ΔT_pp_min_cond)
-    ṁ_ref = min(mref_max_evap, mref_max_cond)
-
-    # Outlet temperatures
-    Q_out = ṁ_ref * (h_ref_2 - h_ref_3)
-    T_c_out = T_c_in + Q_out / (ṁ_c * cp_c)
+    # === NEW: set ṁ_ref from the equality constraint ========================
+    q_out_per = h_ref_2 - h_ref_3
+    ṁ_ref = Q_out_req / q_out_per
+    # Outlet temperatures (now exactly match the requested capacity)
+    Q_out = Q_out_req                               # exactly the required value
+    T_h_out = T_h_in + Q_out / (ṁ_h * cp_h)
     Q_in = ṁ_ref * (h_ref_1 - h_ref_4)
-    T_h_out = T_h_in - Q_in / (ṁ_h * cp_h)
-
+    T_c_out = T_c_in - Q_in / (ṁ_c * cp_c)
     # Legacy field for plotting compatibility
-    T_c_pp_2 = T_c_in + (T_c_out - T_c_in) * 0.5   # approximate (exact pinch location not required for COP)
-
+    T_h_pp_2 = T_h_in + (T_h_out - T_h_in) * 0.5
     cycle_data = dict(
         p_ref_1=p_ref_1,
         T_ref_1=optimal_T_ref_1,
@@ -412,32 +381,33 @@ def solve_cycle(cycle_config, general_config, verbose=True):
         T_ev=T_ev,
         supercritical_cycle=supercritical_cycle,
         ṁ_ref=ṁ_ref,
-        T_c_out=T_c_out,
         T_h_out=T_h_out,
-        T_c_pp_2=T_c_pp_2,
+        T_c_out=T_c_out,
+        T_h_pp_2=T_h_pp_2,
         T_cond=_cp_props("T", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}") if not supercritical_cycle else None,
         Δh_ev=(_cp_props("H", "P", p_ref_1, "Q", 1, f"REFPROP::{refrigerant}") -
                _cp_props("H", "P", p_ref_1, "Q", 0, f"REFPROP::{refrigerant}")),
         Δh_cond=(_cp_props("H", "P", p_ref_2, "Q", 1, f"REFPROP::{refrigerant}") -
                  _cp_props("H", "P", p_ref_2, "Q", 0, f"REFPROP::{refrigerant}")) if not supercritical_cycle else 0,
+        # NEW fields for clarity
+        Q_out_req=Q_out_req,
+        Q_out=Q_out,
     )
-
     if verbose:
-        logger.info(f"Final ṁ_ref = {ṁ_ref:.4f} kg/s | Pinch exactly at the limit somewhere along the curves")
-
+        logger.info(f"Final ṁ_ref = {ṁ_ref:.4f} kg/s | Q_out = {Q_out:.2f} W (exactly as requested) | "
+                    f"Pinch constraints satisfied at the required capacity")
     return cycle_data
-
 # Performance metrics (unchanged)
 def compute_performance(cycle_data, cycle_config, general_config):
     s = cycle_data
-    ṁ_c = cycle_config["ṁ_c"]
-    cp_c = cycle_config["cp_c"]
-    T_c_in = cycle_config["T_c_in"]
+    ṁ_h = cycle_config["ṁ_h"]
+    cp_h = cycle_config["cp_h"]
+    T_h_in = cycle_config["T_h_in"]
     ɳ_shaft = cycle_config.get("ɳ_shaft", 1.0)
     refrigerant = cycle_config["refrigerant"]
     Ẇ_turb = s["ṁ_ref"] * (s["h_ref_3"] - s["h_ref_4"])
     Ẇ_comp = s["ṁ_ref"] * (s["h_ref_2"] - s["h_ref_1"])
-    Q_out = ṁ_c * cp_c * (s["T_c_out"] - T_c_in)
+    Q_out = ṁ_h * cp_h * (s["T_h_out"] - T_h_in)
     Q_in = s["ṁ_ref"] * _specific_heat_from_isobar_path(s["T_ref_1"], s["T_ev"], s["p_ref_1"], general_config, cycle_config, supercritical_cycle=s["supercritical_cycle"]) + \
            s["ṁ_ref"] * s["Δh_ev"] * (s["Q_ref_1"] - s["Q_ref_4"]) + \
            s["ṁ_ref"] * _specific_heat_from_isobar_path(s["T_ev"], s["T_ref_4"], s["p_ref_1"], general_config, cycle_config, supercritical_cycle=s["supercritical_cycle"])
@@ -461,21 +431,18 @@ def compute_performance(cycle_data, cycle_config, general_config):
         PR=s["p_ref_2"] / s["p_ref_1"],
         ṁ_ref=s["ṁ_ref"]
     )
-
 # Diagram data preparation (unchanged – fully compatible)
 def build_ts_data(cycle_data, cycle_config, general_config):
     s = cycle_data
     refrigerant = cycle_config["refrigerant"]
-    T_c_in = cycle_config["T_c_in"]
     T_h_in = cycle_config["T_h_in"]
+    T_c_in = cycle_config["T_c_in"]
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
-
     if not s["supercritical_cycle"]:
         s_ref_23_v_inflection = _cp_props("S", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
         s_ref_23_l_inflection = _cp_props("S", "P", p2, "Q", 0, f"REFPROP::{refrigerant}")
         s_ref_41_v_inflection = _cp_props("S", "P", p1, "Q", 1, f"REFPROP::{refrigerant}")
         s_ref_41_l_inflection = _cp_props("S", "P", p1, "Q", 0, f"REFPROP::{refrigerant}")
-
         # Condenser path 2 -> 3
         s_23_chain, T_23_chain = [], []
         if s["s_ref_2"] > s_ref_23_v_inflection:
@@ -489,7 +456,6 @@ def build_ts_data(cycle_data, cycle_config, general_config):
         if not s_23_chain:
             seg_s, seg_T = _isobar_segment(s["s_ref_2"], s["s_ref_3"], p2, cycle_config, general_config)
             s_23_chain, T_23_chain = seg_s, seg_T
-
         # Evaporator path 4 -> 1
         s_41_chain, T_41_chain = [], []
         if s["s_ref_4"] < s_ref_41_l_inflection:
@@ -508,43 +474,37 @@ def build_ts_data(cycle_data, cycle_config, general_config):
         s_23_chain, T_23_chain = seg_s, seg_T
         seg_s, seg_T = _isobar_segment(s["s_ref_4"], s["s_ref_1"], p1, cycle_config, general_config)
         s_41_chain, T_41_chain = seg_s, seg_T
-
     s_ref_lst = list(itertools.chain(
         [s["s_ref_1"]], [s["s_ref_2"]], s_23_chain, [s["s_ref_3"]], [s["s_ref_4"]], s_41_chain
     ))
     T_ref_lst = list(itertools.chain(
         [s["T_ref_1"]], [s["T_ref_2"]], T_23_chain, [s["T_ref_3"]], [s["T_ref_4"]], T_41_chain
     ))
-
     if not s["supercritical_cycle"]:
         s_ref_23_v_inflection = _cp_props("S", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
         if s["Q_ref_2"] >= 1:
             s_pp_anchor = s_ref_23_v_inflection
-            s_c_out = s["s_ref_3"] + (s_pp_anchor - s["s_ref_3"]) / (s["T_c_pp_2"] - T_c_in) * (s["T_c_out"] - T_c_in)
+            s_h_out = s["s_ref_3"] + (s_pp_anchor - s["s_ref_3"]) / (s["T_h_pp_2"] - T_h_in) * (s["T_h_out"] - T_h_in)
         else:
-            s_c_out = s["s_ref_2"]
+            s_h_out = s["s_ref_2"]
     else:
-        s_c_out = s["s_ref_2"]
-
+        s_h_out = s["s_ref_2"]
     return dict(
         major={"s": [s["s_ref_1"], s["s_ref_2"], s["s_ref_3"], s["s_ref_4"], s["s_ref_1"]],
                "T": [s["T_ref_1"], s["T_ref_2"], s["T_ref_3"], s["T_ref_4"], s["T_ref_1"]]},
         minor={"s": s_ref_lst, "T": T_ref_lst},
-        coolant={"s": [s["s_ref_3"], s_c_out], "T": [T_c_in, s["T_c_out"]]},
-        heating={"s": [s["s_ref_1"], s["s_ref_4"]], "T": [T_h_in, s["T_h_out"]]},
+        coolant={"s": [s["s_ref_3"], s_h_out], "T": [T_h_in, s["T_h_out"]]},
+        heating={"s": [s["s_ref_1"], s["s_ref_4"]], "T": [T_c_in, s["T_c_out"]]},
     )
-
 def build_ph_data(cycle_data, cycle_config):
     s = cycle_data
     refrigerant = cycle_config["refrigerant"]
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
-
     if not s["supercritical_cycle"]:
         h_ref_23_v_inflection = _cp_props("H", "P", p2, "Q", 1, f"REFPROP::{refrigerant}")
         h_ref_23_l_inflection = _cp_props("H", "P", p2, "Q", 0, f"REFPROP::{refrigerant}")
         h_ref_41_v_inflection = _cp_props("H", "P", p1, "Q", 1, f"REFPROP::{refrigerant}")
         h_ref_41_l_inflection = _cp_props("H", "P", p1, "Q", 0, f"REFPROP::{refrigerant}")
-
         h_23_chain, p_23_chain = [], []
         if s["h_ref_2"] > h_ref_23_v_inflection:
             seg_h, seg_p = _isobar_h_segment(s["h_ref_2"], h_ref_23_v_inflection, p2)
@@ -557,7 +517,6 @@ def build_ph_data(cycle_data, cycle_config):
         if not h_23_chain:
             seg_h, seg_p = _isobar_h_segment(s["h_ref_2"], s["h_ref_3"], p2)
             h_23_chain, p_23_chain = seg_h, seg_p
-
         h_41_chain, p_41_chain = [], []
         if s["h_ref_4"] < h_ref_41_l_inflection:
             seg_h, seg_p = _isobar_h_segment(s["h_ref_4"], h_ref_41_l_inflection, p1)
@@ -575,19 +534,14 @@ def build_ph_data(cycle_data, cycle_config):
         h_23_chain, p_23_chain = seg_h, seg_p
         seg_h, seg_p = _isobar_h_segment(s["h_ref_4"], s["h_ref_1"], p1)
         h_41_chain, p_41_chain = seg_h, seg_p
-
     h_ref_lst = list(itertools.chain(
         [s["h_ref_1"]], [s["h_ref_2"]], h_23_chain, [s["h_ref_3"]], [s["h_ref_4"]], h_41_chain
     ))
     p_ref_lst = list(itertools.chain(
         [p1], [p2], p_23_chain, [s["p_ref_3"]], [s["p_ref_4"]], p_41_chain
     ))
-
     return dict(
         major={"h": [s["h_ref_1"], s["h_ref_2"], s["h_ref_3"], s["h_ref_4"], s["h_ref_1"]],
                "p": [p1, p2, s["p_ref_3"], s["p_ref_4"], p1]},
         minor={"h": h_ref_lst, "p": p_ref_lst},
     )
-
-
-
