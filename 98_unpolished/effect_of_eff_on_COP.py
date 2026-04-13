@@ -3,6 +3,7 @@ sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch
 import numpy as np
 
 from config import cycle_config, general_config
@@ -24,7 +25,7 @@ logger = setup_logger()
 
 # Local-only margin controls for this script (does NOT touch config.py)
 LOCAL_TS_MARGINS = {
-	"s_left": 0.20,
+	"s_left": 0.25,
 	"s_right": 0.70,
 	"T_bot": 0.25,
 	"T_top": 0.35,
@@ -63,10 +64,10 @@ def _plot_cycle_numbers(ax, cycle_data, point_overrides=None):
 	"""Annotate the four cycle states with orange numbered markers."""
 	point_overrides = {} if point_overrides is None else point_overrides
 	point_specs = [
-		("s_ref_1", "T_ref_1", "1", (10, -8), "top"),
-		("s_ref_2", "T_ref_2", "2", (10, 8), "bottom"),
+		("s_ref_1", "T_ref_1", "1", (10, -9), "top"),
+		("s_ref_2", "T_ref_2", "2", (8, 7), "bottom"),
 		("s_ref_3", "T_ref_3", "3", (10, 8), "bottom"),
-		("s_ref_4", "T_ref_4", "4", (10, -5), "top"),
+		("s_ref_4", "T_ref_4", "4", (11, -5), "top"),
 	]
 	for s_key, T_key, label, offset, va in point_specs:
 		if label in point_overrides:
@@ -132,64 +133,77 @@ def _expansion_curve_ts(cycle_data, cycle_cfg, eta_turb, num_points=220):
 	return s_arr[valid], T_arr[valid]
 
 def _plot_boundaryline(ax, s_arr, T_arr, color="black", lw=1.8,
-                       hatch_length=5.0,      # tune: length of each hatch (in K units)
-                       hatch_spacing=5.0,    # tune: spacing along the curve (in data units)
-                       hatch_side=1.0,        # +1 or -1 to flip hatch direction
-                       **kwargs):
-    """Mimic MATLAB boundaryline: line + perpendicular hatch marks."""
-    s = np.asarray(s_arr, dtype=float)
-    T = np.asarray(T_arr, dtype=float)
-    valid = np.isfinite(s) & np.isfinite(T)
-    s = s[valid]
-    T = T[valid]
+			hatch_length=5.0,      # tune: length of each hatch (in K units)
+			hatch_spacing=5.0,     # tune: spacing along the curve (in data units)
+			hatch_side=1.0,        # +1 or -1 to flip hatch direction
+			angle=0.0,             # hatch angle in degrees (0 = perpendicular, 20 = 20 deg from perpendicular)
+			**kwargs):
+	"""Mimic MATLAB boundaryline: line + perpendicular hatch marks with optional angle."""
+	s = np.asarray(s_arr, dtype=float)
+	T = np.asarray(T_arr, dtype=float)
+	valid = np.isfinite(s) & np.isfinite(T)
+	s = s[valid]
+	T = T[valid]
 
-    if len(s) < 3:
-        return
+	if len(s) < 2:
+		return
 
-    # Plot the main line (ignore any ls passed in kwargs)
-    line_kwargs = {k: v for k, v in kwargs.items() if k not in ("ls", "linestyle")}
-    ax.plot(s, T, color=color, lw=lw, **line_kwargs)
+	# Plot the main line (ignore any ls passed in kwargs)
+	line_kwargs = {k: v for k, v in kwargs.items() if k not in ("ls", "linestyle")}
+	ax.plot(s, T, color=color, lw=lw, **line_kwargs)
 
-    # Arc-length parametrization
-    ds = np.hypot(np.diff(s), np.diff(T))
-    arc = np.concatenate(([0.], np.cumsum(ds)))
-    L = arc[-1]
-    if L <= 0:
-        return
+	# Arc-length parametrization
+	ds = np.hypot(np.diff(s), np.diff(T))
+	arc = np.concatenate(([0.0], np.cumsum(ds)))
+	L = arc[-1]
+	if L <= 0:
+		return
 
-    # Positions where hatches will be drawn
-    num_hatches = max(1, int(L / hatch_spacing))
-    arc_hatches = np.linspace(hatch_spacing * 0.5, L - hatch_spacing * 0.5, num_hatches)
+	# Positions where hatches will be drawn
+	num_hatches = max(1, int(L / max(hatch_spacing, 1e-12)))
+	if L <= hatch_spacing:
+		arc_hatches = np.array([0.5 * L])
+	else:
+		arc_hatches = np.linspace(hatch_spacing * 0.5, L - hatch_spacing * 0.5, num_hatches)
 
-    # Interpolate position and tangent
-    s_h = np.interp(arc_hatches, arc, s)
-    T_h = np.interp(arc_hatches, arc, T)
+	# Interpolate position and tangent
+	s_h = np.interp(arc_hatches, arc, s)
+	T_h = np.interp(arc_hatches, arc, T)
 
-    ds_darc = np.interp(arc_hatches, arc, np.gradient(s, arc))
-    dT_darc = np.interp(arc_hatches, arc, np.gradient(T, arc))
+	ds_darc = np.interp(arc_hatches, arc, np.gradient(s, arc))
+	dT_darc = np.interp(arc_hatches, arc, np.gradient(T, arc))
 
-    norm = np.hypot(ds_darc, dT_darc)
-    mask = norm > 1e-12
-    if not np.any(mask):
-        return
+	norm = np.hypot(ds_darc, dT_darc)
+	mask = norm > 1e-12
+	if not np.any(mask):
+		return
 
-    s_h = s_h[mask]
-    T_h = T_h[mask]
-    unit_tx = ds_darc[mask] / norm[mask]
-    unit_ty = dT_darc[mask] / norm[mask]
+	s_h = s_h[mask]
+	T_h = T_h[mask]
+	unit_tx = ds_darc[mask] / norm[mask]
+	unit_ty = dT_darc[mask] / norm[mask]
 
-    # Perpendicular vector (rotated 90°)
-    perp_s = -unit_ty * hatch_side
-    perp_T = unit_tx * hatch_side
+	# Perpendicular vector (rotated 90 degrees from tangent)
+	perp_s = -unit_ty * hatch_side
+	perp_T = unit_tx * hatch_side
 
-    # Hatch end points
-    s_end = s_h + hatch_length * perp_s
-    T_end = T_h + hatch_length * perp_T
+	# Rotate perpendicular vector by angle if specified
+	if abs(angle) > 1e-6:
+		angle_rad = np.radians(angle)
+		cos_a = np.cos(angle_rad)
+		sin_a = np.sin(angle_rad)
+		rotated_s = perp_s * cos_a - perp_T * sin_a
+		rotated_T = perp_s * sin_a + perp_T * cos_a
+		s_end = s_h + hatch_length * rotated_s
+		T_end = T_h + hatch_length * rotated_T
+	else:
+		s_end = s_h + hatch_length * perp_s
+		T_end = T_h + hatch_length * perp_T
 
-    # Draw each hatch
-    for i in range(len(s_h)):
-        ax.plot([s_h[i], s_end[i]], [T_h[i], T_end[i]],
-                color=color, lw=lw * 0.65, solid_capstyle="butt")
+	# Draw each hatch
+	for i in range(len(s_h)):
+		ax.plot([s_h[i], s_end[i]], [T_h[i], T_end[i]],
+				color=color, lw=lw * 0.65, solid_capstyle="butt")
 
 def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom_cycle_plots"):
 	"""Plot cycles at the same PR for varying compressor efficiencies."""
@@ -258,7 +272,7 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 		else:
 			color = "green"
 			lw = 1.4
-			alpha = 0.22 + 0.16 * (eta_compr - 0.3) / 0.7
+			alpha = 0.4 + 0.32 * (eta_compr - 0.3) / 0.7
 		s1, T1 = cycle["s_ref_1"], cycle["T_ref_1"]
 		s2, T2 = cycle["s_ref_2"], cycle["T_ref_2"]
 		if np.isfinite(s1) and np.isfinite(T1) and np.isfinite(s2) and np.isfinite(T2):
@@ -271,7 +285,7 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 			continue
 		try:
 			cyc_turb = _solve_cycle_at_fixed_pr(cycle_config, pr_ref, eta_turb)
-			alpha_turb = 0.18 + 0.18 * eta_turb
+			alpha_turb = 0.4 + 0.32 * eta_turb
 			cfg_turb = dict(cycle_config, PR=pr_ref, η_turb=eta_turb)
 			s_turb, T_turb = _expansion_curve_ts(cyc_turb, cfg_turb, eta_turb)
 			if len(s_turb) > 1:
@@ -283,20 +297,36 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 	cycle_ref = cycles[-1][1]
 	refrigerant = cycle_config["refrigerant"]
 
-	# Black line starting at station 1 and going to the right.
+	# Isenthalpic expansion (compressor boundary) starting at station 1, going right.
+	# This represents the pure isenthalpic (throttling) process η_compr = 0.
 	xl, xh = ax.get_xlim()
-	x_stub_start = cycle_ref["s_ref_1"]
-	x_stub_end = xh
-	_plot_boundaryline(
-    ax,
-    [x_stub_start, x_stub_end],
-    [cycle_ref["T_ref_1"], cycle_ref["T_ref_1"]],
-    color="black",
-    lw=2.0,
-    hatch_length=5.0,      # <-- tune these two values to your liking
-    hatch_spacing=5,
-    zorder=11
-    )
+	xh_right = xh
+	p_compr_isenthalpic = np.linspace(cycle_ref["p_ref_1"], 0.01 * cycle_ref["p_ref_1"], 220)
+	s_compr_isenth = []
+	T_compr_isenth = []
+	for p in p_compr_isenthalpic:
+		try:
+			s_compr_isenth.append(_cp_props("S", "P", p, "H", cycle_ref["h_ref_1"], f"REFPROP::{refrigerant}"))
+			T_compr_isenth.append(_cp_props("T", "P", p, "H", cycle_ref["h_ref_1"], f"REFPROP::{refrigerant}"))
+		except Exception:
+			s_compr_isenth.append(np.nan)
+			T_compr_isenth.append(np.nan)
+	s_compr_isenth = np.array(s_compr_isenth)
+	T_compr_isenth = np.array(T_compr_isenth)
+	valid_compr_isenth = np.isfinite(s_compr_isenth) & np.isfinite(T_compr_isenth)
+	if np.any(valid_compr_isenth):
+		_plot_boundaryline(
+        ax,
+        s_compr_isenth[valid_compr_isenth],
+        T_compr_isenth[valid_compr_isenth],
+        color="black",
+        lw=2.0,
+        hatch_length=7.0,
+        hatch_spacing=8.0,
+		hatch_side=-1.0,
+        angle=-65.0,
+        zorder=11
+        )
 
 	# Isenthalpic expansion path (3 -> 4_h) in black.
 	p_exp = np.linspace(cycle_ref["p_ref_3"], cycle_ref["p_ref_1"], 220)
@@ -351,9 +381,10 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
     T_isen[valid_isen],
     color="black",
     lw=2.0,
-    hatch_length=5.0,
-    hatch_spacing=5.0,
+    hatch_length=6.0,
+    hatch_spacing=4.0,
 	hatch_side=-1.0,  # flip hatch direction for isentropic path
+	angle = -20.0,
     zorder=10
     )
 
@@ -414,9 +445,10 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
             [cycle_ref["T_ref_1"], T2_s],
             color="black",
             lw=2.0,
-            hatch_length=5.0,
-            hatch_spacing=5.0,
-            hatch_side=-1.0,  # flip hatch direction for isentropic path
+            hatch_length=6.0,
+            hatch_spacing=4.0,
+            hatch_side=1.0,  # flip hatch direction for isentropic path
+            angle=20.0,
             zorder=10
             )
 			s_cond_s, T_cond_s = _isobar_segment(s2_s, cycle_ref["s_ref_3"], cycle_ref["p_ref_2"], cycle_config, general_config)
@@ -442,18 +474,95 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 
 		left_mask = sv < s_left
 		right_mask = sv > s_right
-		ax.plot(sv[left_mask], Tv[left_mask], color="green", lw=2.1, ls="-.", alpha=0.35, zorder=10)
-		ax.plot(sv[right_mask], Tv[right_mask], color="green", lw=2.1, ls="-.", alpha=0.35, zorder=10)
+		ax.plot(sv[left_mask], Tv[left_mask], color="green", lw=2.1, ls="-.", alpha=0.4, zorder=10)
+		ax.plot(sv[right_mask], Tv[right_mask], color="green", lw=2.1, ls="-.", alpha=0.4, zorder=10)
+
+	# Add textbox labels for boundaries
+	# Turbine isenthalpic boundary (η_turb = 0)
+	if np.any(valid_isenthalpic) and len(s_isenthalpic) > 0:
+		s_mid = np.median(np.array(s_isenthalpic)[valid_isenthalpic])
+		T_mid = np.median(np.array(T_isenthalpic)[valid_isenthalpic])
+		if np.isfinite(s_mid) and np.isfinite(T_mid):
+			ax.text(s_mid*1.032, T_mid*0.952, r"$\eta_{\mathrm{turb}} = 0$",
+				fontsize=13, color="black", ha="center", va="center",
+				bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
+				zorder=16)
+
+	# Turbine isentropic boundary (η_turb = 1)
+	if np.any(valid_isen) and len(s_isen) > 0:
+		s_mid_isen = np.median(np.array(s_isen)[valid_isen])
+		T_mid_isen = np.median(np.array(T_isen)[valid_isen])
+		if np.isfinite(s_mid_isen) and np.isfinite(T_mid_isen):
+			ax.text(s_mid_isen*0.976, T_mid_isen*0.95, r"$\eta_{\mathrm{turb}} = 1$",
+				fontsize=13, color="black", ha="center", va="center",
+				bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
+				zorder=16)
+
+	# Compressor isenthalpic boundary (η_compr = 0)
+	if np.any(valid_compr_isenth) and len(s_compr_isenth) > 0:
+		s_mid_compr = np.median(s_compr_isenth[valid_compr_isenth])
+		T_mid_compr = np.median(T_compr_isenth[valid_compr_isenth])
+		if np.isfinite(s_mid_compr) and np.isfinite(T_mid_compr):
+			ax.text(s_mid_compr*1.03, T_mid_compr*0.96, r"$\eta_{\mathrm{compr}} = 0$",
+				fontsize=13, color="black", ha="center", va="center",
+				bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
+				zorder=16)
+
+	# Compressor isentropic boundary (η_compr = 1) - the isentropic compression path
+	if np.isfinite(s2_s) and np.isfinite(T2_s):
+		s_mid_compr_isen = 0.5 * (cycle_ref["s_ref_1"] + s2_s)
+		T_mid_compr_isen = 0.5 * (cycle_ref["T_ref_1"] + T2_s)
+		ax.text(s_mid_compr_isen*0.976, T_mid_compr_isen*0.992, r"$\eta_{\mathrm{compr}} = 1$",
+				fontsize=13, color="black", ha="center", va="center",
+				bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
+				zorder=16)
 
 	_plot_cycle_numbers(ax, cycle_ref, point_overrides={"4": (s4_h, T4_h)} if np.isfinite(s4_h) and np.isfinite(T4_h) else None)
-	ax.set_title(r"$\mathrm{Compressor\ efficiency\ overlay\ at\ fixed\ PR}$")
-	ax.set_xlabel(r"$s\ [\mathrm{J/kg/K}]$")
-	ax.set_ylabel(r"$T\ [\mathrm{K}]$")
+	ax.set_xlabel(r"$s\ [\mathrm{J/kg/K}]$", fontsize=14)
+	ax.set_ylabel(r"$T\ [\mathrm{K}]$", fontsize=14)
+
+	# Manual legend box with a true hatched sample drawn by _plot_boundaryline.
+	ds_plot = s_hi - s_lo
+	dT_plot = T_hi - T_lo
+	box_x0 = s_lo + 0.02 * ds_plot
+	box_x1 = s_lo + 0.26 * ds_plot
+	box_y0 = T_hi - 0.10 * dT_plot
+	box_y1 = T_hi - 0.03 * dT_plot
+	ax.plot([box_x0, box_x1], [box_y0, box_y0], color="black", lw=1.0, zorder=18)
+	ax.plot([box_x1, box_x1], [box_y0, box_y1], color="black", lw=1.0, zorder=18)
+	ax.plot([box_x1, box_x0], [box_y1, box_y1], color="black", lw=1.0, zorder=18)
+	ax.plot([box_x0, box_x0], [box_y1, box_y0], color="black", lw=1.0, zorder=18)
+	s_leg0 = box_x0 + 0.02 * ds_plot
+	s_leg1 = box_x0 + 0.12 * ds_plot
+	T_leg = box_y0 + 0.032 * dT_plot
+	T_leg_boundaryline = box_y0 + 0.035 * dT_plot
+	_plot_boundaryline(
+		ax,
+		[s_leg0, s_leg1],
+		[T_leg_boundaryline, T_leg_boundaryline],
+		color="black",
+		lw=2,
+		hatch_length=4,
+		hatch_spacing=6,
+		hatch_side=-1.0,
+		angle=-55.0,
+		zorder=19,
+	)
+	ax.text(
+		box_x0 + 0.14 * ds_plot,
+		T_leg,
+		"Boundary",
+		fontsize=11,
+		color="black",
+		ha="left",
+		va="center",
+		zorder=19,
+	)
 
 	out_root = Path(output_dir) / cycle_config["refrigerant"]
 	out_root.mkdir(parents=True, exist_ok=True)
-	out_pdf = out_root / "single_cycle_custom_TS_compressor_efficiency.pdf"
-	out_png = out_root / "single_cycle_custom_TS_compressor_efficiency.png"
+	out_pdf = out_root / "effect_of_compr_and_turb_eff_on_COP.pdf"
+	out_png = out_root / "effect_of_compr_and_turb_eff_on_COP.png"
 	fig.savefig(out_pdf, dpi=1000, bbox_inches="tight")
 	fig.savefig(out_png, dpi=300, bbox_inches="tight")
 	plt.close(fig)
