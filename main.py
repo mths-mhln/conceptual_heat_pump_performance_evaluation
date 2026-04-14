@@ -34,16 +34,7 @@ def main(perform_verification=True):
     if analysis_type == "single_configuration":
         logger.info("Evaluating conceptual heat pump cycle")
         cycle_data = solve_cycle(cycle_config, general_config, verbose=True)
-        print(cycle_data)
         perf = compute_performance(cycle_data, cycle_config, general_config)
-        make_PR_optimization_plot(
-            cycle_data.get("PR_eval_values"),
-            cycle_data.get("COP_eval_values"),
-            cycle_config=cycle_config,
-            output_dir="heat_pump_thermodynamic_diagrams",
-            best_PR=cycle_data.get("PR"),
-            best_COP=perf.get("COP_turb"),
-        )
         table = Table(title=f"Conceptual Heat Pump Cycle - {cycle_config['refrigerant']}", show_lines=False)
         table.add_column("Symbol", style="cyan", no_wrap=True)
         table.add_column("Value", justify="right")
@@ -121,7 +112,7 @@ def main(perform_verification=True):
             Y,
             Z,
             cycle_config,
-            output_dir=os.path.join("COP_investigations", "00_obtained_data"),
+            output_dir=os.path.join("COP_investigations"),
         )
         logger.info(f"{cop_sweep_key} vs efficiency investigation completed")
         

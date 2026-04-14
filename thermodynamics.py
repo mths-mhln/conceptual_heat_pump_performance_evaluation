@@ -241,6 +241,8 @@ def evaluate_cycle_PR(cycle_config, general_config, PR, verbose=True):
 
     # Determine cycle type
     Pcrit = _cp_props("Pcrit", f"REFPROP::{refrigerant}")
+    Tcrit = _cp_props("Tcrit", f"REFPROP::{refrigerant}")
+    s_crit = _cp_props("S", "P", Pcrit, "T", Tcrit, f"REFPROP::{refrigerant}")
     supercritical_cycle = p_ref_2 > Pcrit or Q_ref_2 == 0 # latter is not supercritical, but same calculaiton procedure holds
 
     # Impossible cycle checks
@@ -248,9 +250,10 @@ def evaluate_cycle_PR(cycle_config, general_config, PR, verbose=True):
         if verbose:
             logger.info(f"Station 2 temperature (T_ref_2 = {T_ref_2:.2f} K) is significantly lower than station 3 temperature (T_ref_3 = {T_ref_3:.2f} K).")
         return None
-    if Q_ref_3 == 1:
+    if s_ref_3 > s_crit * 0.95:
         if verbose:
             logger.info("Station 3 is saturated vapour.")
+            logger.info(f"Station 3 properties: T_ref_3 = {T_ref_3:.2f} K, p_ref_3 = {p_ref_3:.2f} Pa, h_ref_3 = {h_ref_3:.2f} J/kg, s_ref_3 = {s_ref_3:.2f} J/kg/K, s_crit = {s_crit:.2f} J/kg/K")
         return None
     
     p_ref_4 = p_ref_1
@@ -369,7 +372,7 @@ def solve_cycle(cycle_config, general_config, verbose=True):
     T_ev = T_c_in - ΔT_pp_1 - ΔT_sh
     p_ev = _cp_props("P", "T", T_ev, "Q", 0, f"REFPROP::{refrigerant}")
     PR_min = max(1.01, (p_ev + 1.0) / p_ev)
-    PR_max = 30.0
+    PR_max = 30
 
     # Any supercritical point with p2 ∈ (Pcrit, Pcrit × critical_buffer_ratio]
     # is treated as infeasible → optimiser automatically selects the
