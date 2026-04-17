@@ -315,7 +315,11 @@ def rejection_hxc(flu,props,mdot,thi,mh,cph,n): # why in the world would you pus
         # determine heat-source intermediate temperatures:
         th_ev_in = thi + mdot*(props[2,1] - props[2,3])/(mh*cph)
         th_ev_ou = thi + mdot*(props[2,2] - props[2,3])/(mh*cph)
-
+        print(f"mdot={mdot:.4f} kg/s")
+        print(f"props[:,0:2]={props[:,0:4]}")
+        print(f"th_ev_in={th_ev_in:.2f} K, th_ev_ou={th_ev_ou:.2f} K")
+        print(f"thi={thi:.2f} K")
+        print(f"tho={tho:.2f} K")
         # heat exchanger UA and pinch point calculation via discretisation:
         [UApc,pp_pc] = UA_sizing(flu,mdot,props[:,0:2],tho,mh,cph,n[0],0)
         [UAco,pp_co] = UA_sizing(flu,mdot,props[:,1:3],th_ev_in,mh,cph,n[1],0)

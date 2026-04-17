@@ -23,7 +23,12 @@ cp_c = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric press
 ΔT_pp_4 = 10                # [K] - pinch point 4
 ΔT_sh = 5                   # [K] - superheat
 ɳ_shaft = 1.00              # [-] - not accounted for by MTW code
-    
+near_critical_buffer_ratio = 1.05  # [-] thermodynamic properties near the critical point can be unreliable, hence I force the
+                                    # optimizer to stay away from this region
+ΔT_pp_min_evap = 10
+ΔT_pp_min_cond = 10
+Q_out_req = 200000
+
 cycle_config = {
     "T_h_in": T_h_in,
     "T_c_in": T_c_in,
@@ -37,7 +42,11 @@ cycle_config = {
     "ΔT_pp_3": ΔT_pp_3,
     "ΔT_pp_4": ΔT_pp_4,
     "ΔT_sh": ΔT_sh,
-    "ɳ_shaft": ɳ_shaft
+    "ɳ_shaft": ɳ_shaft,
+    "near_critical_buffer_ratio": near_critical_buffer_ratio,
+    "ΔT_pp_min_evap": ΔT_pp_min_evap,
+    "ΔT_pp_min_cond": ΔT_pp_min_cond,
+    "Q_out_req": Q_out_req    
 }
 
 
@@ -58,4 +67,9 @@ if analysis_type == "single_configuration":
         "ph_margin_h_right": 0.15,
         "ph_margin_p_bot": 0.1,
         "ph_margin_p_top": 0.2,
+        "de_popsize": 50,          # more individuals = better global coverage
+        "de_maxiter": 10000,         # ← this is your "many more iterations"
+        "de_tol": 1e-9,
+        "de_strategy": "best1bin",
+        "min_mref_threshold": 0.005,   # adjust to your typical system size (kg/s)
     }

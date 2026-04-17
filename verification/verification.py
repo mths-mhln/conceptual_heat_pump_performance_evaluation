@@ -57,8 +57,12 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
         for working_fluid in ["R1233zd(E)", "n-pentane", "MM"]:  
             cycle_config["refrigerant"] = working_fluid
             logger.info(f"Evaluating conceptual heat pump cycle for refrigerant: {cycle_config['refrigerant']}")
-            state = solve_cycle(cycle_config, general_config, verbose = False)
+            state = solve_cycle(cycle_config, general_config, verbose = True)
             perf = compute_performance(state, cycle_config, general_config)
+
+            if generate_thdy_diagrams:
+                logger.info("Rendering T-S diagram")
+                
             MTW_cycle_config = {
                 "T_h_in": cycle_config["T_h_in"],
                 "T_c_in": cycle_config["T_c_in"],
@@ -68,12 +72,28 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                 "cp_h": cycle_config["cp_h"],
                 "T_evap": state["T_ev"], #When using MTW code, I stick to MTW nomenclature, hence the difference in variable names
                 "PR": perf["PR"],
-                "dtsh": cycle_config["ΔT_sh"],
+                "dtsh": state["T_ref_1"] - state["T_ev"],
                 "dtsc": state["T_cond"] - state["T_ref_3"],
                 "T_co": state["T_c_out"],
                 "eta": cycle_config["η_compr"],
                 "refrigerant": cycle_config["refrigerant"]
             }
+            MTW_cycle_config_print = {
+                "T_h_in": cycle_config["T_h_in"],
+                "T_c_in": cycle_config["T_c_in"],
+                "m_c": cycle_config["ṁ_c"],
+                "cp_c": cycle_config["cp_c"],
+                "m_h": cycle_config["ṁ_h"],
+                "cp_h": cycle_config["cp_h"],
+                "T_evap": state["T_ev"], #When using MTW code, I stick to MTW nomenclature, hence the difference in variable names
+                "PR": perf["PR"],
+                "dtsh": state["T_ref_1"] - state["T_ev"],
+                "dtsc": state["T_cond"] - state["T_ref_3"],
+                "T_co": state["T_c_out"],
+                "eta": cycle_config["η_compr"],
+                "refrigerant": cycle_config["refrigerant"]
+            }
+            print(f"MTW cycle config for {working_fluid}: {MTW_cycle_config_print}")
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore",
@@ -89,10 +109,8 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                 mtw_perf=MTW_cycle_performance_params[cycle_config["refrigerant"]],
             )
             overall_max_discrepancy = max(overall_max_discrepancy, max_discrepancy)
-            
-            if generate_thdy_diagrams:
-                logger.info("Rendering T-S diagram")
-                make_thdy_plot(
+            # print(f"MTW cycle config for {working_fluid}: {MTW_cycle_config}")
+            make_thdy_plot(
                     state,
                     perf,
                     diagram_type="TS",
@@ -103,17 +121,17 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                     verbose=True,
                 )
                 
-                logger.info("Rendering P-H diagram")
-                make_thdy_plot(
-                    state,
-                    perf,
-                    diagram_type="PH",
-                    cycle_config=cycle_config,
-                    output_dir="verification/thermodynamic_diagrams",
-                    ph_data=build_ph_data(state, cycle_config),
-                    verification_data=MTW_cycle_state_params[cycle_config["refrigerant"]],
-                    verbose=True,
-                )
+            logger.info("Rendering P-H diagram")
+            make_thdy_plot(
+                state,
+                perf,
+                diagram_type="PH",
+                cycle_config=cycle_config,
+                output_dir="verification/thermodynamic_diagrams",
+                ph_data=build_ph_data(state, cycle_config),
+                verification_data=MTW_cycle_state_params[cycle_config["refrigerant"]],
+                verbose=True,
+            )
 
         table.add_section()
         table.add_row(

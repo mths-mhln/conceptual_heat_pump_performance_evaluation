@@ -132,6 +132,55 @@ def _expansion_curve_ts(cycle_data, cycle_cfg, eta_turb, num_points=220):
 	valid = np.isfinite(s_arr) & np.isfinite(T_arr) & (T_arr > 1.0)
 	return s_arr[valid], T_arr[valid]
 
+
+def _compression_curve_ts(cycle_data, cycle_cfg, eta_compr, num_points=220):
+	"""Return curved TS compression path 1->2 using h(p)=h1+(h_is(p)-h1)/eta."""
+	refrigerant = cycle_cfg["refrigerant"]
+	p1 = cycle_data["p_ref_1"]
+	p2 = cycle_data["p_ref_2"]
+	h1 = cycle_data["h_ref_1"]
+	s1 = cycle_data["s_ref_1"]
+
+	p_arr = np.linspace(p1, p2, num_points)
+	s_arr = np.full_like(p_arr, np.nan, dtype=float)
+	T_arr = np.full_like(p_arr, np.nan, dtype=float)
+
+	for i, p in enumerate(p_arr):
+		try:
+			h_is = _cp_props("H", "P", p, "S", s1, f"REFPROP::{refrigerant}")
+			if np.isclose(eta_compr, 0.0):
+				h = h1
+			else:
+				h = h1 + (h_is - h1) / eta_compr
+			s_arr[i] = _cp_props("S", "P", p, "H", h, f"REFPROP::{refrigerant}")
+			T_arr[i] = _cp_props("T", "P", p, "H", h, f"REFPROP::{refrigerant}")
+		except Exception:
+			pass
+
+	valid = np.isfinite(s_arr) & np.isfinite(T_arr) & (T_arr > 1.0)
+	return s_arr[valid], T_arr[valid]
+
+
+def _find_practical_compressor_curve(pr_ref, eta_grid=None, num_points=220):
+	"""Return the first valid low-efficiency compressor curve found by scanning eta values."""
+	if eta_grid is None:
+		eta_grid = np.concatenate([
+			np.array([1e-3]),
+			np.linspace(2e-3, 5e-2, 20),
+			np.linspace(6e-2, 2.5e-1, 20),
+		])
+
+	for eta_compr in eta_grid:
+		try:
+			cycle = _solve_cycle_at_fixed_pr_and_compr(cycle_config, pr_ref, float(eta_compr))
+			s_comp, T_comp = _compression_curve_ts(cycle, cycle_config, float(eta_compr), num_points=num_points)
+			if len(s_comp) > 1:
+				return s_comp, T_comp, float(eta_compr)
+		except Exception:
+			continue
+
+	return None, None, None
+
 def _plot_boundaryline(ax, s_arr, T_arr, color="black", lw=1.8,
 			hatch_length=5.0,      # tune: length of each hatch (in K units)
 			hatch_spacing=5.0,     # tune: spacing along the curve (in data units)
@@ -205,9 +254,72 @@ def _plot_boundaryline(ax, s_arr, T_arr, color="black", lw=1.8,
 		ax.plot([s_h[i], s_end[i]], [T_h[i], T_end[i]],
 				color=color, lw=lw * 0.65, solid_capstyle="butt")
 
+
+def _label_curve(ax, x_arr, y_arr, text, color="green", fraction=0.62, fontsize=9, offset=0.0, side=1.0):
+	"""Place a small rotated label along a curve with an optional normal offset."""
+	x = np.asarray(x_arr, dtype=float)
+	y = np.asarray(y_arr, dtype=float)
+	valid = np.isfinite(x) & np.isfinite(y)
+	x = x[valid]
+	y = y[valid]
+	if x.size < 2:
+		return
+
+	index = int(np.clip(round(fraction * (x.size - 1)), 0, x.size - 1))
+	if index <= 0:
+		index = 1
+	elif index >= x.size - 1:
+		index = x.size - 2
+
+	if x.size >= 3:
+		x0, y0 = x[index - 1], y[index - 1]
+		x1, y1 = x[index + 1], y[index + 1]
+	else:
+		x0, y0 = x[0], y[0]
+		x1, y1 = x[-1], y[-1]
+
+	dx = x1 - x0
+	dy = y1 - y0
+	angle = np.degrees(np.arctan2(dy, dx))
+	if angle < -90:
+		angle += 180
+	elif angle > 90:
+		angle -= 180
+
+	norm = np.hypot(dx, dy)
+	if norm > 1e-12 and offset != 0.0:
+		nx = -dy / norm
+		ny = dx / norm
+		x_pos = x[index] + side * offset * nx
+		y_pos = y[index] + side * offset * ny
+	else:
+		x_pos = x[index]
+		y_pos = y[index]
+
+	ax.text(
+		x_pos,
+		y_pos,
+		text,
+		color=color,
+		fontsize=fontsize,
+		rotation=angle,
+		rotation_mode="anchor",
+		ha="center",
+		va="center",
+		zorder=20,
+	)
+
 def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom_cycle_plots"):
 	"""Plot cycles at the same PR for varying compressor efficiencies."""
-	eta_compr_values = np.linspace(0.3, 1.0, 4)
+	# Calculate practical compressor limit first, then generate intermediate values.
+	s_comp_practical, T_comp_practical, eta_compr_practical = _find_practical_compressor_curve(pr_ref)
+	if eta_compr_practical is not None:
+		# 3 equally spaced values between 0 and the practical limit (skip 0).
+		eta_compr_values = np.linspace(eta_compr_practical, 1, 4)[1:]
+	else:
+		# Fallback if practical limit not found.
+		eta_compr_values = np.linspace(0.3, 1.0, 4)
+
 	cycles = []
 	for eta_compr in eta_compr_values:
 		cycle = _solve_cycle_at_fixed_pr_and_compr(cycle_config, pr_ref, eta_compr)
@@ -273,10 +385,33 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 			color = "green"
 			lw = 1.4
 			alpha = 0.4 + 0.32 * (eta_compr - 0.3) / 0.7
-		s1, T1 = cycle["s_ref_1"], cycle["T_ref_1"]
-		s2, T2 = cycle["s_ref_2"], cycle["T_ref_2"]
-		if np.isfinite(s1) and np.isfinite(T1) and np.isfinite(s2) and np.isfinite(T2):
-			ax.plot([s1, s2], [T1, T2], color=color, lw=lw, alpha=alpha, zorder=8)
+
+		s_comp, T_comp = _compression_curve_ts(cycle, cycle_config, eta_compr)
+		if len(s_comp) > 1:
+			ax.plot(s_comp, T_comp, color=color, lw=lw, alpha=alpha, zorder=8)
+		else:
+			s1, T1 = cycle["s_ref_1"], cycle["T_ref_1"]
+			s2, T2 = cycle["s_ref_2"], cycle["T_ref_2"]
+			if np.isfinite(s1) and np.isfinite(T1) and np.isfinite(s2) and np.isfinite(T2):
+				ax.plot([s1, s2], [T1, T2], color=color, lw=lw, alpha=alpha, zorder=8)
+
+		if color == "green" and len(s_comp) > 1:
+			pass
+
+	# Plot the practical compressor boundary (calculated at the top of the function).
+	if s_comp_practical is not None and T_comp_practical is not None:
+		_plot_boundaryline(
+			ax,
+			s_comp_practical,
+			T_comp_practical,
+			color="black",
+			lw=1.8,
+			hatch_length=3.5,
+			hatch_spacing=7.0,
+			hatch_side=-1.0,
+			angle=-30.0,
+			zorder=8,
+		)
 
 	# Add turbine-efficiency overlays at the same PR: η_turb in [0, 1], 5 samples, all light green.
 	eta_turb_values = np.linspace(0.0, 1.0, 5)
@@ -297,36 +432,9 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 	cycle_ref = cycles[-1][1]
 	refrigerant = cycle_config["refrigerant"]
 
-	# Isenthalpic expansion (compressor boundary) starting at station 1, going right.
-	# This represents the pure isenthalpic (throttling) process η_compr = 0.
+	# Practical compressor boundary: keep only the first feasible low-efficiency curve.
 	xl, xh = ax.get_xlim()
 	xh_right = xh
-	p_compr_isenthalpic = np.linspace(cycle_ref["p_ref_1"], 0.01 * cycle_ref["p_ref_1"], 220)
-	s_compr_isenth = []
-	T_compr_isenth = []
-	for p in p_compr_isenthalpic:
-		try:
-			s_compr_isenth.append(_cp_props("S", "P", p, "H", cycle_ref["h_ref_1"], f"REFPROP::{refrigerant}"))
-			T_compr_isenth.append(_cp_props("T", "P", p, "H", cycle_ref["h_ref_1"], f"REFPROP::{refrigerant}"))
-		except Exception:
-			s_compr_isenth.append(np.nan)
-			T_compr_isenth.append(np.nan)
-	s_compr_isenth = np.array(s_compr_isenth)
-	T_compr_isenth = np.array(T_compr_isenth)
-	valid_compr_isenth = np.isfinite(s_compr_isenth) & np.isfinite(T_compr_isenth)
-	if np.any(valid_compr_isenth):
-		_plot_boundaryline(
-        ax,
-        s_compr_isenth[valid_compr_isenth],
-        T_compr_isenth[valid_compr_isenth],
-        color="black",
-        lw=2.0,
-        hatch_length=7.0,
-        hatch_spacing=8.0,
-		hatch_side=-1.0,
-        angle=-65.0,
-        zorder=11
-        )
 
 	# Isenthalpic expansion path (3 -> 4_h) in black.
 	p_exp = np.linspace(cycle_ref["p_ref_3"], cycle_ref["p_ref_1"], 220)
@@ -438,19 +546,19 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 		s2_s = _cp_props("S", "P", cycle_ref["p_ref_2"], "H", h2_s, f"REFPROP::{refrigerant}")
 		T2_s = _cp_props("T", "P", cycle_ref["p_ref_2"], "H", h2_s, f"REFPROP::{refrigerant}")
 		if np.isfinite(s2_s) and np.isfinite(T2_s):
-			# ax.plot([cycle_ref["s_ref_1"], s2_s], [cycle_ref["T_ref_1"], T2_s], color="black", lw=2, zorder=10)
+			s_isen_comp, T_isen_comp = _compression_curve_ts(cycle_ref, cycle_config, 1.0)
 			_plot_boundaryline(
-            ax,
-            [cycle_ref["s_ref_1"], s2_s],
-            [cycle_ref["T_ref_1"], T2_s],
-            color="black",
-            lw=2.0,
-            hatch_length=6.0,
-            hatch_spacing=4.0,
-            hatch_side=1.0,  # flip hatch direction for isentropic path
-            angle=20.0,
-            zorder=10
-            )
+				ax,
+				s_isen_comp,
+				T_isen_comp,
+				color="black",
+				lw=2.0,
+				hatch_length=6.0,
+				hatch_spacing=4.0,
+				hatch_side=1.0,
+				angle=20.0,
+				zorder=10,
+			)
 			s_cond_s, T_cond_s = _isobar_segment(s2_s, cycle_ref["s_ref_3"], cycle_ref["p_ref_2"], cycle_config, general_config)
 			s_cond_s = np.array(s_cond_s)
 			T_cond_s = np.array(T_cond_s)
@@ -498,16 +606,6 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 				bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
 				zorder=16)
 
-	# Compressor isenthalpic boundary (η_compr = 0)
-	if np.any(valid_compr_isenth) and len(s_compr_isenth) > 0:
-		s_mid_compr = np.median(s_compr_isenth[valid_compr_isenth])
-		T_mid_compr = np.median(T_compr_isenth[valid_compr_isenth])
-		if np.isfinite(s_mid_compr) and np.isfinite(T_mid_compr):
-			ax.text(s_mid_compr*1.03, T_mid_compr*0.96, r"$\eta_{\mathrm{compr}} = 0$",
-				fontsize=13, color="black", ha="center", va="center",
-				bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
-				zorder=16)
-
 	# Compressor isentropic boundary (η_compr = 1) - the isentropic compression path
 	if np.isfinite(s2_s) and np.isfinite(T2_s):
 		s_mid_compr_isen = 0.5 * (cycle_ref["s_ref_1"] + s2_s)
@@ -516,6 +614,23 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 				fontsize=13, color="black", ha="center", va="center",
 				bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
 				zorder=16)
+
+	# Practical compressor boundary (first feasible low-eta curve found by scanning).
+	if s_comp_practical is not None and T_comp_practical is not None and eta_compr_practical is not None:
+		s_mid_compr_prac = np.median(np.asarray(s_comp_practical, dtype=float))
+		T_mid_compr_prac = np.median(np.asarray(T_comp_practical, dtype=float))
+		if np.isfinite(s_mid_compr_prac) and np.isfinite(T_mid_compr_prac):
+			ax.text(
+				1835,
+				310,
+				rf"$\eta_{{\mathrm{{compr}}}} \approx {eta_compr_practical:.3f}$",
+				fontsize=13,
+				color="black",
+				ha="center",
+				va="center",
+				bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
+				zorder=16,
+			)
 
 	_plot_cycle_numbers(ax, cycle_ref, point_overrides={"4": (s4_h, T4_h)} if np.isfinite(s4_h) and np.isfinite(T4_h) else None)
 	ax.set_xlabel(r"$s\ [\mathrm{J/kg/K}]$", fontsize=14)
@@ -535,11 +650,10 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 	s_leg0 = box_x0 + 0.02 * ds_plot
 	s_leg1 = box_x0 + 0.12 * ds_plot
 	T_leg = box_y0 + 0.032 * dT_plot
-	T_leg_boundaryline = box_y0 + 0.035 * dT_plot
 	_plot_boundaryline(
 		ax,
 		[s_leg0, s_leg1],
-		[T_leg_boundaryline, T_leg_boundaryline],
+		[T_leg, T_leg],
 		color="black",
 		lw=2,
 		hatch_length=4,

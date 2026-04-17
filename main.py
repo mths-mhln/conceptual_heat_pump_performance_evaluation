@@ -24,7 +24,7 @@ start = timeit.default_timer()
 def main(perform_verification=True):
     # Perform code verification:
     if perform_verification:
-        verification(verification_table=True, generate_thdy_diagrams=False)
+        verification(verification_table=True, generate_thdy_diagrams=True)
 
     analysis_type = general_config["analysis_type"]
     if general_config.get("ignore_coolprop_warnings", False):
@@ -53,7 +53,7 @@ def main(perform_verification=True):
         ]
         for symbol, value, unit, description in rows:
             table.add_row(symbol, value, unit, description)
-        Console().print(table)
+        # Console().print(table)
         logger.info("Rendering T-S diagram")
         make_thdy_plot(
             cycle_data,
@@ -141,7 +141,7 @@ def main(perform_verification=True):
         )
 
 if __name__ == "__main__":
-    main(perform_verification=True)
+    main(perform_verification=False)
     end = timeit.default_timer()
     elapsed = end - start
     logger.info(f"Total execution time: {elapsed:.2f} seconds")

@@ -644,6 +644,51 @@ def _compute_turbine_expansion_curve(cycle_data, cycle_config, n=220):
     return p_arr[valid], h_arr[valid], s_arr[valid], T_arr[valid]
 
 
+def _compute_compressor_curve(cycle_data, cycle_config, n=220):
+    """Compute a curved compression path using h(p)=h1+(h_is(p)-h1)/eta."""
+    eta_compr = cycle_config.get("η_compr", None)
+    if eta_compr is None:
+        return None
+
+    return _compute_compressor_curve_for_eta(cycle_data, cycle_config, eta_compr, n=n)
+
+
+def _compute_compressor_curve_for_eta(cycle_data, cycle_config, eta_compr, n=220):
+    """Compute a curved compression path for a specific compressor efficiency."""
+    if eta_compr is None:
+        return None
+
+    p1 = cycle_data["p_ref_1"]
+    p2 = cycle_data["p_ref_2"]
+    h1 = cycle_data["h_ref_1"]
+    s1 = cycle_data["s_ref_1"]
+
+    p_arr = np.linspace(p1, p2, n)
+    h_arr = np.full_like(p_arr, np.nan, dtype=float)
+    s_arr = np.full_like(p_arr, np.nan, dtype=float)
+    T_arr = np.full_like(p_arr, np.nan, dtype=float)
+
+    for i, p in enumerate(p_arr):
+        try:
+            h_is = _q("H", "P", p, "S", s1, cycle_config=cycle_config)
+            if not np.isfinite(h_is):
+                continue
+            if np.isclose(eta_compr, 0.0):
+                h = h1
+            else:
+                h = h1 + (h_is - h1) / eta_compr
+            h_arr[i] = h
+            s_arr[i] = _q("S", "P", p, "H", h, cycle_config=cycle_config)
+            T_arr[i] = _q("T", "P", p, "H", h, cycle_config=cycle_config)
+        except Exception:
+            pass
+
+    valid = np.isfinite(p_arr) & np.isfinite(h_arr) & np.isfinite(s_arr) & np.isfinite(T_arr)
+    if valid.sum() < 3:
+        return None
+    return p_arr[valid], h_arr[valid], s_arr[valid], T_arr[valid]
+
+
 def _find_expansion_segment_index(x_arr, y_arr, x3, y3, x4, y4):
     """Find index i where segment i->i+1 corresponds to 3->4 in minor arrays."""
     x = np.asarray(x_arr)
@@ -665,9 +710,17 @@ def _find_expansion_segment_index(x_arr, y_arr, x3, y3, x4, y4):
 
 
 def _plot_cycle_with_curved_expansion_ts(ax, cycle_data, ts_data, cycle_config):
-    """Plot cycle minor path but replace straight 3->4 with curved expansion."""
+    """Plot cycle minor path but replace straight 1->2 and 3->4 with curved paths."""
     x = np.asarray(ts_data["minor"]["s"])
     y = np.asarray(ts_data["minor"]["T"])
+    idx_comp = _find_expansion_segment_index(
+        x,
+        y,
+        cycle_data["s_ref_1"],
+        cycle_data["T_ref_1"],
+        cycle_data["s_ref_2"],
+        cycle_data["T_ref_2"],
+    )
     idx = _find_expansion_segment_index(
         x,
         y,
@@ -676,22 +729,40 @@ def _plot_cycle_with_curved_expansion_ts(ax, cycle_data, ts_data, cycle_config):
         cycle_data["s_ref_4"],
         cycle_data["T_ref_4"],
     )
+    comp_curve = _compute_compressor_curve(cycle_data, cycle_config)
+    comp_curve_zero = _compute_compressor_curve_for_eta(cycle_data, cycle_config, 0.0)
     curve = _compute_turbine_expansion_curve(cycle_data, cycle_config)
 
-    if idx is None or curve is None:
+    if idx_comp is None or idx is None or comp_curve is None or curve is None or idx_comp >= idx:
         ax.plot(x, y, color='green', lw=1.5, zorder=7)
         return
 
-    p_arr, h_arr, s_curve, T_curve = curve
-    ax.plot(x[:idx + 1], y[:idx + 1], color='green', lw=1.5, zorder=7)
+    _, _, s_comp, T_comp = comp_curve
+    _, _, s_curve, T_curve = curve
+    ax.plot(x[:idx_comp + 1], y[:idx_comp + 1], color='green', lw=1.5, zorder=7)
+    ax.plot(s_comp, T_comp, color='green', lw=1.5, zorder=7)
+    ax.plot(x[idx_comp + 1:idx + 1], y[idx_comp + 1:idx + 1], color='green', lw=1.5, zorder=7)
     ax.plot(s_curve, T_curve, color='green', lw=1.5, zorder=7)
     ax.plot(x[idx + 1:], y[idx + 1:], color='green', lw=1.5, zorder=7)
 
+    # Compressor boundary overlays: theoretical eta=0 limit and the first practical low-eta limit.
+    if comp_curve_zero is not None:
+        _, _, s_zero, T_zero = comp_curve_zero
+        ax.plot(s_zero, T_zero, color='green', lw=1.1, ls=':', alpha=0.45, zorder=6)
+
 
 def _plot_cycle_with_curved_expansion_ph(ax, cycle_data, ph_data, cycle_config):
-    """Plot cycle minor path but replace straight 3->4 with curved expansion."""
+    """Plot cycle minor path but replace straight 1->2 and 3->4 with curved paths."""
     x = np.asarray(ph_data["minor"]["h"])
     y = np.asarray(ph_data["minor"]["p"])
+    idx_comp = _find_expansion_segment_index(
+        x,
+        y,
+        cycle_data["h_ref_1"],
+        cycle_data["p_ref_1"],
+        cycle_data["h_ref_2"],
+        cycle_data["p_ref_2"],
+    )
     idx = _find_expansion_segment_index(
         x,
         y,
@@ -700,16 +771,27 @@ def _plot_cycle_with_curved_expansion_ph(ax, cycle_data, ph_data, cycle_config):
         cycle_data["h_ref_4"],
         cycle_data["p_ref_4"],
     )
+    comp_curve = _compute_compressor_curve(cycle_data, cycle_config)
+    comp_curve_zero = _compute_compressor_curve_for_eta(cycle_data, cycle_config, 0.0)
     curve = _compute_turbine_expansion_curve(cycle_data, cycle_config)
 
-    if idx is None or curve is None:
+    if idx_comp is None or idx is None or comp_curve is None or curve is None or idx_comp >= idx:
         ax.plot(x, y, color='green', lw=1.5, zorder=7)
         return
 
-    p_curve, h_curve, s_arr, T_arr = curve
-    ax.plot(x[:idx + 1], y[:idx + 1], color='green', lw=1.5, zorder=7)
+    p_comp, h_comp, _, _ = comp_curve
+    p_curve, h_curve, _, _ = curve
+    ax.plot(x[:idx_comp + 1], y[:idx_comp + 1], color='green', lw=1.5, zorder=7)
+    ax.plot(h_comp, p_comp, color='green', lw=1.5, zorder=7)
+    ax.plot(x[idx_comp + 1:idx + 1], y[idx_comp + 1:idx + 1], color='green', lw=1.5, zorder=7)
     ax.plot(h_curve, p_curve, color='green', lw=1.5, zorder=7)
     ax.plot(x[idx + 1:], y[idx + 1:], color='green', lw=1.5, zorder=7)
+
+    # Compressor boundary overlays: theoretical eta=0 limit and the first practical low-eta limit.
+    if comp_curve_zero is not None:
+        _, h_zero, _, _ = comp_curve_zero
+        p_zero = comp_curve_zero[0]
+        ax.plot(h_zero, p_zero, color='green', lw=1.1, ls=':', alpha=0.45, zorder=6)
 
 
 
