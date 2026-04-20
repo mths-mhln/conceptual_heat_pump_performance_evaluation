@@ -13,7 +13,11 @@ class ColoredFormatter(logging.Formatter):
 
     def format(self, record):
         log_color = self.COLORS.get(record.levelname, self.RESET)
-        log_message = super().format(record)
+        if record.levelno >= logging.WARNING:
+            fmt = "%(levelname)-8s %(filename)s:%(lineno)d - %(message)s"
+        else:
+            fmt = "%(levelname)-8s %(message)s"
+        log_message = logging.Formatter(fmt).format(record)
         return f"{log_color}{log_message}{self.RESET}"
 
 
@@ -28,7 +32,7 @@ def setup_logger():
         ch.setLevel(logging.INFO)
 
         # Create a formatter and attach it to the handler
-        formatter = ColoredFormatter("%(levelname)-8s %(message)s")
+        formatter = ColoredFormatter()
         ch.setFormatter(formatter)
 
         # Add the handler to the logger

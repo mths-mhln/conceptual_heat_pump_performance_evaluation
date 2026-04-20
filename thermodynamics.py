@@ -1,7 +1,9 @@
+import os
 import sys
-sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/')
-sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/07_conceptual_heat_pump_performance_evaluation/verification/')
-import math
+cwd = os.getcwd()
+sys.path.append(f'{cwd}/verification/')
+
+import functools
 import itertools
 import numpy as np
 import CoolProp.CoolProp as CP
@@ -54,6 +56,10 @@ def _update_state_from_pair(state, in1, val1, in2, val2):
         state.update(CP.HmassT_INPUTS, val2, val1)
     elif pair == ("H", "T"):
         state.update(CP.HmassT_INPUTS, val1, val2)
+    elif pair == ("T", "S"):
+        state.update(CP.SmassT_INPUTS, val2, val1)
+    elif pair == ("S", "T"):
+        state.update(CP.SmassT_INPUTS, val1, val2)
     else:
         raise NotImplementedError(f"Unsupported input pair for AbstractState: {pair}")
 
@@ -176,16 +182,6 @@ def _sample_isobar_ts_uniform_arc(h_start, h_end, p, cycle_config, num_points=20
     h_uniform = np.interp(arc_uniform, arc, h_valid)
     return s_uniform, T_uniform, h_uniform
 
-def _check_second_derivative_sign(s_arr, T_arr):
-    dT_ds = np.gradient(T_arr, s_arr)
-    d2T_ds2 = np.gradient(dT_ds, s_arr)
-    if np.all(d2T_ds2 > 0):
-        return 1
-    elif np.all(d2T_ds2 < 0):
-        return -1
-    else:
-        return 0
-
 # New helpers for true minimum approach (counter-flow pinch anywhere)
 def _compute_min_approach_cond(ṁ_ref, h_ref_2, h_ref_3, p_ref_2, T_h_in, cp_h, ṁ_h, refrigerant):
     if ṁ_ref <= 0:
@@ -225,27 +221,17 @@ def _compute_min_approach_evap(ṁ_ref, h_ref_4, h_ref_1, p_ref_1, T_c_in, cp_c,
             pass
     return np.nanmin(delta_t)
 
-def _find_max_mref(compute_min_approach, target_delta, bounds=(1e-3, 100), tol=1e-6):
-    low, high = bounds
-    while high - low > tol:
-        mid = (low + high) / 2
-        if compute_min_approach(mid) >= target_delta:
-            low = mid
-        else:
-            high = mid
-    return low
-
 # ===================================================================
 # EVOLUTIONARY GLOBAL OPTIMIZER (Differential Evolution)
 # ===================================================================
-def _run_global_de(objective, bounds, general_config):
+def _run_global_de(objective, bounds, general_config, callback=None):
     """Differential Evolution – replaces SHGO for true global search with many iterations.
     Configurable via general_config keys:
         de_popsize, de_maxiter, de_tol, de_strategy, de_init
     """
     de_popsize = int(general_config.get("de_popsize", 30))
     de_maxiter = int(general_config.get("de_maxiter", 1000))
-    de_tol = float(general_config.get("de_tol", 1e-8))
+    de_tol = float(general_config.get("de_tol", 1e-3))
     de_strategy = general_config.get("de_strategy", "best1bin")
     de_init = general_config.get("de_init", "latinhypercube")
 
@@ -257,15 +243,89 @@ def _run_global_de(objective, bounds, general_config):
         maxiter=de_maxiter,
         tol=de_tol,
         init=de_init,
-        workers=1,          # CoolProp is not always thread-safe
-        disp=True,
-        polish=True,
+        workers=-1,          # CoolProp is not always thread-safe
+        disp=False,
+        polish=False,
+        callback=callback,
         seed=42,
     )
 
-    logger.info(f"Differential Evolution finished – nfev = {result.nfev:,}, "
-                f"success = {result.success}, message = {result.message}")
-    return result, result.nfev
+    if general_config.get("analysis_type") != "COP_vs_eff_investigation":
+        log_msg = f"Differential Evolution finished: {result.nfev:,} function evaluations, success = {result.success}"
+        if not result.success:
+            log_msg += f", optimizer final message = {result.message}"
+        logger.info(log_msg)
+    return result
+
+def _create_optimization_trace():
+    return {
+        "eval_idx": [],
+        "objective": [],
+        "failed": [],
+        "best_so_far": [],
+        "iter_idx": [],
+        "iter_best": [],
+    }
+
+def _record_trace_point(optimization_trace, state, score, failed):
+    state["eval_counter"] += 1
+    if np.isfinite(score) and score < state["best_score_seen"]:
+        state["best_score_seen"] = score
+    optimization_trace["eval_idx"].append(state["eval_counter"])
+    optimization_trace["objective"].append(float(score))
+    optimization_trace["failed"].append(bool(failed))
+    optimization_trace["best_so_far"].append(float(state["best_score_seen"]))
+
+def _de_trace_callback(optimization_trace, *args, **kwargs):
+    intermediate_result = kwargs.get("intermediate_result", None)
+    if intermediate_result is None and len(args) > 0 and hasattr(args[0], "fun"):
+        intermediate_result = args[0]
+    if intermediate_result is None:
+        return False
+    optimization_trace["iter_idx"].append(len(optimization_trace["iter_idx"]) + 1)
+    optimization_trace["iter_best"].append(float(intermediate_result.fun))
+    return False
+
+def _raw_objective(cycle_config, general_config, decision_variables, verbose, fixed_PR=None):
+    if fixed_PR is None:
+        PR, T_ref_1_var, s_ref_1_var, T_ref_3 = decision_variables
+    else:
+        PR = fixed_PR
+        T_ref_1_var, s_ref_1_var, T_ref_3 = decision_variables
+    cycle_data = evaluate_cycle_candidate(
+        cycle_config,
+        general_config,
+        PR,
+        T_ref_1_var,
+        s_ref_1_var,
+        T_ref_3,
+        verbose=verbose,
+    )
+    if cycle_data is None:
+        return np.random.uniform(low=0.05, high=0.15, size=None), True, None
+    return -compute_performance(cycle_data, cycle_config, general_config)["COP_turb"], False, cycle_data
+
+def _objective_with_trace(x, cycle_config, general_config, verbose, optimization_trace, trace_state, fixed_PR=None):
+    score, invalid_cycle, _ = _raw_objective(cycle_config, general_config, x, verbose, fixed_PR=fixed_PR)
+    if score >= 0.05:  # invalid candidate
+        _record_trace_point(optimization_trace, trace_state, score, True)
+        return score
+    _record_trace_point(optimization_trace, trace_state, score, invalid_cycle)
+    return score
+
+def _objective_de(x, cycle_config, general_config, verbose, optimization_trace, trace_state, fixed_PR=None):
+    return _objective_with_trace(
+        x,
+        cycle_config,
+        general_config,
+        verbose,
+        optimization_trace,
+        trace_state,
+        fixed_PR=fixed_PR,
+    )
+
+def _de_callback_with_trace(*args, optimization_trace, **kwargs):
+    return _de_trace_callback(optimization_trace, *args, **kwargs)
 
 # Cycle solver (FULL OPTIMISATION as requested – now using DE)
 def _candidate_bounds(cycle_config):
@@ -274,40 +334,18 @@ def _candidate_bounds(cycle_config):
     T_h_in = cycle_config["T_h_in"]
     ΔT_pp_min_evap = cycle_config["ΔT_pp_min_evap"]
     ΔT_pp_min_cond = cycle_config["ΔT_pp_min_cond"]
-    T_ref_1_min = T_c_in - 50.0
-    print(T_ref_1_min)
+    T_ref_1_min = T_c_in - 30.0
     T_ref_1_max = T_c_in - ΔT_pp_min_evap
-    p_ref_1_min = _cp_props("P", "T", T_ref_1_min, "Q", 1, f"REFPROP::{refrigerant}")    
-    p_ref_1_max = _cp_props("P", "T", T_c_in, "Q", 1, f"REFPROP::{refrigerant}")
-    h_ref_central = _cp_props("H", "T", T_ref_1_max, "Q", 1, f"REFPROP::{refrigerant}")
-    print(T_ref_1_max, p_ref_1_max, refrigerant)
-    print({
-        "PR": (1.01, 30.0),
-        "h_ref_1": (h_ref_central*0.9, h_ref_central*1.1),
-        "p_ref_1": (p_ref_1_min, p_ref_1_max),
-        "T_ref_3": (T_h_in + ΔT_pp_min_cond, T_h_in + 150.0),
-    })
+    s_ref_1_min = _cp_props("S", "T", T_ref_1_max, "Q", 1, f"REFPROP::{refrigerant}") - 0.2*_cp_props("S", "T", T_ref_1_min, "Q", 1, f"REFPROP::{refrigerant}")
+    s_ref_1_max = _cp_props("S", "T", T_ref_1_max, "Q", 1, f"REFPROP::{refrigerant}") + 0.2*_cp_props("S", "T", T_ref_1_max, "Q", 1, f"REFPROP::{refrigerant}")
     return {
-        "PR": (1.01, 30.0),
-        "h_ref_1": (h_ref_central*0.9, h_ref_central*1.1),
-        "p_ref_1": (p_ref_1_min, p_ref_1_max),
-        "T_ref_3": (T_h_in + ΔT_pp_min_cond, T_h_in + 150.0),
+        "PR": (1.01, 90.0),
+        "s_ref_1": (s_ref_1_min, s_ref_1_max),
+        "T_ref_1": (T_ref_1_min, T_ref_1_max),
+        "T_ref_3": (T_h_in + ΔT_pp_min_cond, T_h_in + 50.0),
     }
 
-def _refine_bounds_around_point(bounds, point, shrink_fraction=0.15):
-    """Kept for potential future use (not needed with DE)."""
-    refined_bounds = []
-    for (lower, upper), value in zip(bounds, point):
-        span = upper - lower
-        half_width = max(span * shrink_fraction, 1e-9)
-        refined_lower = max(lower, value - half_width)
-        refined_upper = min(upper, value + half_width)
-        if refined_upper <= refined_lower:
-            refined_lower, refined_upper = lower, upper
-        refined_bounds.append((refined_lower, refined_upper))
-    return refined_bounds
-
-def evaluate_cycle_candidate(cycle_config, general_config, PR, h_ref_1_var, p_ref_1_var, T_ref_3, verbose=True):
+def evaluate_cycle_candidate(cycle_config, general_config, PR, T_ref_1_var, s_ref_1_var, T_ref_3, verbose=True):
     """Evaluate one candidate cycle and return cycle data or None if it is impossible."""
     refrigerant = cycle_config["refrigerant"]
     T_c_in = cycle_config["T_c_in"]
@@ -324,21 +362,22 @@ def evaluate_cycle_candidate(cycle_config, general_config, PR, h_ref_1_var, p_re
     if Q_out_req is None or Q_out_req <= 0:
         raise ValueError("cycle_config must contain Q_out_req > 0")
     if PR <= 1.0 or T_ref_3 < T_h_in + ΔT_pp_min_cond - 1e-3:
-        print(f"Candidate rejected due to PR or T_ref_3 constraints: PR={PR}, T_ref_3={T_ref_3:.2f} K")
         return None
     fluid = f"REFPROP::{refrigerant}"
     try:
-        p_ref_1 = p_ref_1_var
-        T_ref_1 = _cp_props("T", "H", h_ref_1_var, "P", p_ref_1, fluid)
+        p_ref_1 = _cp_props("P", "T", T_ref_1_var, "S", s_ref_1_var, fluid)
+        T_ref_1 = T_ref_1_var
         if T_ref_1 > T_c_in - ΔT_pp_min_evap + 1e-3:
-            print(f"Candidate rejected due to T_ref_1 constraint: T_ref_1={T_ref_1:.2f} K")
+            if verbose:
+                logger.info(f"Candidate rejected due to T_ref_1 constraint: T_ref_1={T_ref_1:.2f} K, T_c_in={T_c_in:.2f} K, ΔT_pp_min_evap={ΔT_pp_min_evap:.2f} K")
             return None
         p_ref_2 = PR * p_ref_1
         Q_ref_1 = _vapour_quality_scaler(_cp_props("Q", "T", T_ref_1, "P", p_ref_1, fluid))
         if Q_ref_1 < 0.999:
-            print(f"Candidate rejected due to ref_1 quality constraint: Q_ref_1={Q_ref_1:.4f}")
+            if verbose:
+                logger.info(f"Candidate rejected due to subcooled/ref_1 constraint: Q_ref_1={Q_ref_1:.4f}")
             return None
-        T_ev = _cp_props("T", "P", p_ref_1, "Q", 0, fluid)
+        T_ev = _cp_props("T", "P", p_ref_1, "Q", 1, fluid)
         h_ref_1 = _cp_props("H", "T", T_ref_1, "P", p_ref_1, fluid)
         s_ref_1 = _cp_props("S", "T", T_ref_1, "P", p_ref_1, fluid)
         h2_is = _cp_props("H", "P", p_ref_2, "S", s_ref_1, fluid)
@@ -352,7 +391,8 @@ def evaluate_cycle_candidate(cycle_config, general_config, PR, h_ref_1_var, p_re
         Tcrit = _cp_props("Tcrit", fluid)
         s_crit = _cp_props("S", "P", Pcrit, "T", Tcrit, fluid)
         if T_ref_2 < T_ref_3 * 0.99 or s_ref_3 > s_crit * 0.95:
-            print(f"Candidate rejected due to ref_2/ref_3 constraints: T_ref_2={T_ref_2:.2f} K, T_ref_3={T_ref_3:.2f} K, s_ref_3={s_ref_3:.4f}, s_crit={s_crit:.4f}")
+            if verbose:
+                logger.info(f"Candidate rejected due to ref_2/ref_3 constraints: T_ref_2={T_ref_2:.2f} K, T_ref_3={T_ref_3:.2f} K, s_ref_3={s_ref_3:.4f}, s_crit={s_crit:.4f}")
             return None
         h4_is = _cp_props("H", "P", p_ref_1, "S", s_ref_3, fluid)
         h_ref_4 = h_ref_3 - η_turb * (h_ref_3 - h4_is)
@@ -363,16 +403,19 @@ def evaluate_cycle_candidate(cycle_config, general_config, PR, h_ref_1_var, p_re
         q_out_per = h_ref_2 - h_ref_3
         w_net_per = (h_ref_2 - h_ref_1) - (h_ref_3 - h_ref_4) * cycle_config.get("ɳ_shaft", 1.0)
         if q_out_per <= 0 or w_net_per <= 0:
-            print(f"Candidate rejected due to negative performance values: q_out_per={q_out_per:.4f}, w_net_per={w_net_per:.4f}")
+            if verbose:
+                logger.info(f"Candidate rejected due to negative performance values: q_out_per={q_out_per:.4f}, w_net_per={w_net_per:.4f}")
             return None
         mref_req = Q_out_req / q_out_per
         if mref_req <= 0:
-            print(f"Candidate rejected due to non-positive mass flow requirement: mref_req={mref_req:.4f}")
+            if verbose:
+                logger.info(f"Candidate rejected due to non-positive mass flow requirement: mref_req={mref_req:.4f}")
             return None
         min_app_evap_val = _compute_min_approach_evap(mref_req, h_ref_4, h_ref_1, p_ref_1, T_c_in, cp_c, ṁ_c, refrigerant)
         min_app_cond_val = _compute_min_approach_cond(mref_req, h_ref_2, h_ref_3, p_ref_2, T_h_in, cp_h, ṁ_h, refrigerant)
         if min_app_evap_val < ΔT_pp_min_evap or min_app_cond_val < ΔT_pp_min_cond:
-            print(f"Candidate rejected due to minimum approach constraints: min_app_evap_val={min_app_evap_val:.2f} K, min_app_cond_val={min_app_cond_val:.2f} K")
+            if verbose:
+                logger.info(f"Candidate rejected due to minimum approach constraints: min_app_evap_val={min_app_evap_val:.2f} K, min_app_cond_val={min_app_cond_val:.2f} K")
             return None
         supercritical_cycle = p_ref_2 > Pcrit or Q_ref_2 == 0
         Δh_ev = _cp_props("H", "P", p_ref_1, "Q", 1, fluid) - _cp_props("H", "P", p_ref_1, "Q", 0, fluid)
@@ -386,28 +429,12 @@ def evaluate_cycle_candidate(cycle_config, general_config, PR, h_ref_1_var, p_re
         T_h_pp_2 = T_h_in + (T_h_out - T_h_in) * 0.5
         return dict(
             PR=PR,
-            p_ref_1=p_ref_1,
-            T_ref_1=T_ref_1,
-            h_ref_1=h_ref_1,
-            s_ref_1=s_ref_1,
-            Q_ref_1=Q_ref_1,
-            p_ref_2=p_ref_2,
-            T_ref_2=T_ref_2,
-            h_ref_2=h_ref_2,
-            s_ref_2=s_ref_2,
-            Q_ref_2=Q_ref_2,
-            p_ref_3=p_ref_2,
-            T_ref_3=T_ref_3,
-            h_ref_3=h_ref_3,
-            s_ref_3=s_ref_3,
+            p_ref_1=p_ref_1, T_ref_1=T_ref_1, h_ref_1=h_ref_1, s_ref_1=s_ref_1, Q_ref_1=Q_ref_1,
+            p_ref_2=p_ref_2, T_ref_2=T_ref_2, h_ref_2=h_ref_2, s_ref_2=s_ref_2, Q_ref_2=Q_ref_2,
+            p_ref_3=p_ref_2, T_ref_3=T_ref_3, h_ref_3=h_ref_3, s_ref_3=s_ref_3,
             Q_ref_3=0.0 if supercritical_cycle else _vapour_quality_scaler(_cp_props("Q", "T", T_ref_3, "P", p_ref_2, fluid)),
-            p_ref_4=p_ref_1,
-            T_ref_4=T_ref_4,
-            h_ref_4=h_ref_4,
-            s_ref_4=s_ref_4,
-            Q_ref_4=Q_ref_4,
-            Q_ref_4_isenth=Q_ref_4_isenth,
-            T_ev=T_ev,
+            p_ref_4=p_ref_1, T_ref_4=T_ref_4, h_ref_4=h_ref_4, s_ref_4=s_ref_4, Q_ref_4=Q_ref_4, Q_ref_4_isenth=Q_ref_4_isenth,
+            T_ev=T_ev, 
             supercritical_cycle=supercritical_cycle,
             ṁ_ref=mref_req,
             T_h_out=T_h_out,
@@ -420,92 +447,65 @@ def evaluate_cycle_candidate(cycle_config, general_config, PR, h_ref_1_var, p_re
             Q_out=Q_out_req,
         )
     except Exception as e:
-        logger.error(f"An error occurred while evaluating the cycle candidate: {e}")
+        if verbose:
+            logger.exception(f"An error occurred while evaluating the cycle candidate: {e}")
         return None
 
 def _optimize_cycle(cycle_config, general_config, fixed_PR=None, verbose=True):
     """Optimize the cycle or, when PR is supplied, optimize the remaining variables at that PR.
-    Now uses Differential Evolution + anti-degenerate m_ref penalty."""
+    Now uses Differential Evolution with a small random penalty for nonfeasible cycles."""
     bounds = _candidate_bounds(cycle_config)
-    min_mref_threshold = general_config.get("min_mref_threshold", 1e-6)   # <<< prevents near-zero cooling capacity
+    optimization_trace = _create_optimization_trace()
+    trace_state = {
+        "eval_counter": 0,
+        "best_score_seen": np.inf,
+    }
+    objective = functools.partial(
+        _objective_de,
+        cycle_config=cycle_config,
+        general_config=general_config,
+        verbose=verbose,
+        optimization_trace=optimization_trace,
+        trace_state=trace_state,
+        fixed_PR=fixed_PR,
+    )
+    de_callback = functools.partial(
+        _de_callback_with_trace,
+        optimization_trace=optimization_trace,
+    )
 
     if fixed_PR is None:
-        # Full optimisation (PR + h_ref_1 + p_ref_1 + T_ref_3)
-        search_bounds = [bounds["PR"], bounds["h_ref_1"], bounds["p_ref_1"], bounds["T_ref_3"]]
+        # Full optimisation (PR + T_ref_1 + s_ref_1 + T_ref_3)
+        search_bounds = [bounds["PR"], bounds["T_ref_1"], bounds["s_ref_1"], bounds["T_ref_3"]]
 
-        def raw_objective(x):
-            cycle_data = evaluate_cycle_candidate(cycle_config, general_config, x[0], x[1], x[2], x[3], verbose=False)
-            if cycle_data is None:
-                return 1e6 + np.random.normal(loc=0.0, scale=500.0)
-            return -compute_performance(cycle_data, cycle_config, general_config)["COP_turb"]
-
-        def objective(x):
-            score = raw_objective(x)
-            if score >= 1e3:          # invalid candidate
-                return score
-            # Re-evaluate to get ṁ_ref for penalty
-            cycle_data = evaluate_cycle_candidate(cycle_config, general_config, x[0], x[1], x[2], x[3], verbose=False)
-            mref = cycle_data.get("ṁ_ref", 0.0) if cycle_data is not None else 0.0
-            if mref < min_mref_threshold:
-                penalty = 1e7 * (min_mref_threshold - mref) / min_mref_threshold
-                return 1e6 + penalty
-            return score
-
-        res, total_nfev = _run_global_de(objective, search_bounds, general_config)
+        res = _run_global_de(objective, search_bounds, general_config, callback=de_callback)
 
         if (not np.isfinite(res.fun)) or (res.fun >= 0):
             raise ValueError("No feasible cycle found that satisfies the pinch constraints at the requested Q_out_req.")
-        best_PR, best_h_ref_1, best_p_ref_1, best_T_ref_3 = res.x
-        best_cycle_data = evaluate_cycle_candidate(cycle_config, general_config, best_PR, best_h_ref_1, best_p_ref_1, best_T_ref_3, verbose=False)
+        best_PR, best_T_ref_1, best_s_ref_1, best_T_ref_3 = res.x
+        best_cycle_data = evaluate_cycle_candidate(cycle_config, general_config, best_PR, best_T_ref_1, best_s_ref_1, best_T_ref_3, verbose=verbose)
         if best_cycle_data is None:
             raise ValueError("No feasible cycle found that satisfies the pinch constraints at the requested Q_out_req.")
         best_cycle_data["PR"] = best_PR
         best_cycle_data["COP_turb"] = -res.fun
-        if verbose:
-            logger.info(
-                f"Optimised cycle found → PR = {best_PR:.6f}, h_ref_1 = {best_h_ref_1:.2f} J/kg, p_ref_1 = {best_p_ref_1:.2f} Pa, "
-                f"T_ref_3 = {best_T_ref_3:.2f} K, COP_turb = {-res.fun:.4f}, Q_out_req = {cycle_config['Q_out_req']:.2f} W, m_ref = {best_cycle_data['ṁ_ref']:.6f} kg/s"
-            )
-        logger.info(f"Objective function evaluations: {total_nfev}")
+        best_cycle_data["optimization_trace"] = optimization_trace
         return best_cycle_data
 
     else:
         # Fixed PR optimisation
-        search_bounds = [bounds["h_ref_1"], bounds["p_ref_1"], bounds["T_ref_3"]]
+        search_bounds = [bounds["T_ref_1"], bounds["s_ref_1"], bounds["T_ref_3"]]
 
-        def raw_objective(x):
-            cycle_data = evaluate_cycle_candidate(cycle_config, general_config, fixed_PR, x[0], x[1], x[2], verbose=False)
-            if cycle_data is None:
-                return 1e6 + np.random.normal(loc=0.0, scale=500.0)
-            return -compute_performance(cycle_data, cycle_config, general_config)["COP_turb"]
-
-        def objective(x):
-            score = raw_objective(x)
-            if score >= 1e3:          # invalid candidate
-                return score
-            cycle_data = evaluate_cycle_candidate(cycle_config, general_config, fixed_PR, x[0], x[1], x[2], verbose=False)
-            mref = cycle_data.get("ṁ_ref", 0.0) if cycle_data is not None else 0.0
-            if mref < min_mref_threshold:
-                penalty = 1e7 * (min_mref_threshold - mref) / min_mref_threshold
-                return 1e6 + penalty
-            return score
-
-        res, total_nfev = _run_global_de(objective, search_bounds, general_config)
+        res = _run_global_de(objective, search_bounds, general_config, callback=de_callback)
 
         if (not np.isfinite(res.fun)) or (res.fun >= 0):
             raise ValueError("Specified PR leads to an impossible cycle.")
-        best_h_ref_1, best_p_ref_1, best_T_ref_3 = res.x
-        best_cycle_data = evaluate_cycle_candidate(cycle_config, general_config, fixed_PR, best_h_ref_1, best_p_ref_1, best_T_ref_3, verbose=False)
+        best_T_ref_1, best_s_ref_1, best_T_ref_3 = res.x
+        best_cycle_data = evaluate_cycle_candidate(cycle_config, general_config, fixed_PR, best_T_ref_1, best_s_ref_1, best_T_ref_3, verbose=verbose)
         if best_cycle_data is None:
             raise ValueError("Specified PR leads to an impossible cycle.")
         best_cycle_data["PR"] = fixed_PR
         best_cycle_data["COP_turb"] = -res.fun
-        if verbose:
-            logger.info(
-                f"Fixed PR cycle found → PR = {fixed_PR:.6f}, h_ref_1 = {best_h_ref_1:.2f} J/kg, p_ref_1 = {best_p_ref_1:.2f} Pa, "
-                f"T_ref_3 = {best_T_ref_3:.2f} K, COP_turb = {-res.fun:.4f}, Q_out_req = {cycle_config['Q_out_req']:.2f} W, m_ref = {best_cycle_data['ṁ_ref']:.6f} kg/s"
-            )
-            logger.info(f"Objective function evaluations: {total_nfev}")
+        best_cycle_data["optimization_trace"] = optimization_trace
         return best_cycle_data
 
 def solve_cycle(cycle_config, general_config, verbose=True):

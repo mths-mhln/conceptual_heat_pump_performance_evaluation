@@ -3,19 +3,20 @@
 
 \section{Conceptual Heat Pump Model With Turbine Expansion}
 
-\textbf{Objective.} The objective of this code is to quantify \textbf{how much system COP can increase} when replacing throttling losses with a \textbf{turbine expander} and mechanical work recovery.
+\textbf{Objective.} The objective of this code is to quantify \textbf{how much system COP can increase} when replacing throttling losses with a \textbf{turbine expander} and mechanical work recovery, using a global optimization of cycle state variables.
 
 \subsection{Modelling Approach}
 
-The implementation solves a steady-state vapor-compression heat pump cycle with turbine expansion, pinch-point constraints, and performance post-processing. Thermophysical properties are evaluated with \textbf{CoolProp/REFPROP}. For each candidate pressure ratio, cycle feasibility is checked and COP is evaluated.
+The implementation solves a steady-state vapor-compression heat pump cycle with turbine expansion, pinch-point constraints, and performance post-processing. Thermophysical properties are evaluated with \textbf{CoolProp/REFPROP} through an AbstractState-based wrapper. The optimization is performed with \textbf{Differential Evolution} and candidate cycles are parameterized by \(PR,\,T_{ref,1},\,s_{ref,1},\,T_{ref,3}\) (or \(T_{ref,1},\,s_{ref,1},\,T_{ref,3}\) when \(PR\) is fixed).
 
 \textbf{Key assumptions}
 \begin{itemize}
 \item Steady-state, 1D component model.
 \item Fixed component efficiencies: $\eta_{\mathrm{compr}}$, $\eta_{\mathrm{turb}}$, and shaft efficiency $\eta_{\mathrm{shaft}}$.
-\item Pinch constraints enforced via $\Delta T_{\mathrm{pp},1}$, $\Delta T_{\mathrm{pp},3}$, and $\Delta T_{\mathrm{pp},4}$.
-\item Mass flow rate of refrigerant determined from the evaporator-side energy balance.
+\item Pinch constraints are enforced as \textbf{true minimum approach temperatures} along condenser and evaporator heat-transfer paths (not only at endpoints).
+\item Refrigerant mass flow rate is determined from the required sink-side heat duty $\dot Q_{out,req}$ and candidate specific condenser heat rejection.
 \item Subcritical and supercritical operating regions both handled, with a near-critical buffer to avoid numerically unreliable states.
+\item Infeasible candidates receive a small positive penalty score, while feasible candidates are ranked by minimizing $-COP_{\mathrm{turb}}$.
 \end{itemize}
 
 \textbf{Block diagram (code workflow)}
@@ -42,27 +43,28 @@ $\{T_{h,in},\,T_{c,in},\,\dot m_h,\,\dot m_c,\,c_{p,h},\,c_{p,c},\,\eta_{\mathrm
 \node[decision, right=of in] (mode) {\textbf{Fixed $PR$?}};
 
 \node[block, above right=0.35cm and 1.7cm of mode] (eval) {
-\textbf{Cycle evaluation for candidate $PR$}\\
+\textbf{Cycle evaluation for candidate variables}\\
 Solve stations $1\rightarrow2\rightarrow3\rightarrow4$:\\
 $\{p_i,T_i,h_i,s_i,Q_i\}$ from CoolProp/REFPROP.
 };
 
 \node[block, below right=0.35cm and 1.7cm of mode] (obj) {
-\textbf{Objective function $f(PR)$}\\
-$f(PR)=-COP_{\mathrm{turb}}$ with infeasibility penalty.
+\textbf{Objective function $f(\mathbf{x})$}\\
+$\mathbf{x}=[PR,\,T_{ref,1},\,s_{ref,1},\,T_{ref,3}]$ (or fixed-$PR$ subset),\\
+$f(\mathbf{x})=-COP_{\mathrm{turb}}$ with infeasibility penalty.
 };
 
 \node[block, right=of eval] (checks) {
 \textbf{Feasibility checks}\\
-Pinch constraints: $\Delta T_{\min}\geq\Delta T_{\mathrm{pp},3}$,\\
+Pinch constraints: true condenser/evaporator $\Delta T_{\min}$ checks,\\
 physical checks (quality/state validity),\\
 near-critical buffer for robust optimization.
 };
 
 \node[block, right=of obj] (opt) {
-\textbf{PR optimization}\\
-Bounded search in subcritical and safe-supercritical intervals;\\
-select $PR^*=\arg\max(COP_{\mathrm{turb}})$ among feasible solutions.
+\textbf{Global optimization (DE)}\\
+Bounded search over candidate vector $\mathbf{x}$;\\
+select $\mathbf{x}^*=\arg\max(COP_{\mathrm{turb}})$ among feasible solutions.
 };
 
 \node[block, right=of checks] (perf) {
@@ -73,7 +75,7 @@ COP_{\mathrm{turb}},\,COP_{\mathrm{is}},\,COP_{\mathrm{isenth}}$.
 
 \node[block, below=1.1cm of perf] (out) {
 \textbf{Outputs}\\
-Best cycle state set, selected $PR$, COP metrics, and TS/PH plotting data.
+Best cycle state set, selected decision variables, COP metrics, and TS/PH plotting data.
 };
 
 \draw[line] (in) -- (mode);
@@ -86,8 +88,20 @@ Best cycle state set, selected $PR$, COP metrics, and TS/PH plotting data.
 \draw[line] (perf) -- (out);
 
 \end{tikzpicture}
-\caption{\textbf{Detailed workflow of the turbine-assisted heat pump model and pressure-ratio handling.}}
+\caption{\textbf{Detailed workflow of the turbine-assisted heat pump model and global multi-variable optimization.}}
 \end{figure}
+
+\subsection{Implemented Optimization Method (Current Version)}
+
+The current solver uses \textbf{Differential Evolution} (global, population-based search) instead of local or pressure-ratio-only scanning. The candidate bounds are defined as:
+\begin{itemize}
+\item $PR \in [1.01,\,30]$ (when not fixed),
+\item $T_{ref,1} \in [T_{c,in}-30,\,T_{c,in}-\Delta T_{pp,min,evap}]$,
+\item $s_{ref,1}$ around saturated-vapor entropy at the cold-side inlet condition,
+\item $T_{ref,3} \in [T_{h,in}+\Delta T_{pp,min,cond},\,T_{h,in}+150]$.
+\end{itemize}
+
+For each candidate, the model reconstructs all thermodynamic states, computes the required refrigerant mass flow from $\dot Q_{out,req}$, and rejects nonphysical or pinch-violating cycles. The best feasible solution maximizes $COP_{\mathrm{turb}}$ (equivalently minimizes $-COP_{\mathrm{turb}}$).
 
 \subsection{Verification}
 

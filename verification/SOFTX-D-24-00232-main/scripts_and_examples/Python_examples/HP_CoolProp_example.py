@@ -16,14 +16,12 @@
 #
 # Martin T. White, University of Sussex, 05/06/2024
 
-from itertools import cycle
+import os
 import sys
-sys.path.append('d:\\nexus\\02_learning\\00_university_education\\04_MSc_TUDelft\\05_thesis_nexus\\05_conceptual_heat_pump_performance_evaluation\\verification\\SOFTX-D-24-00232-main\\python_modules')
-# had to extend this because I think using relative paths made python (installed on C drive) look further on C drive rather than on D drive where the files are located.
+cwd = os.getcwd()
+sys.path.append(f'{cwd}/verification/SOFTX-D-24-00232-main/python_modules')
 import thermo_props
 import hp_simulator as hp
-import matplotlib.pyplot as plt
-import numpy as np
 
 def MTW_HP_calculator(MTW_cycle_config):
     # heat exchanger discretisation:

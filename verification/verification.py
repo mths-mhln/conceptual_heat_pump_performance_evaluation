@@ -1,6 +1,7 @@
+import os
 import sys
-sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/05_conceptual_heat_pump_performance_evaluation/')
-sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/05_conceptual_heat_pump_performance_evaluation/verification/SOFTX-D-24-00232-main/scripts_and_examples/Python_examples')
+cwd = os.getcwd()
+sys.path.append(f'{cwd}/verification/SOFTX-D-24-00232-main/scripts_and_examples/Python_examples/')
 
 from thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
 from HP_CoolProp_example import MTW_HP_calculator
@@ -57,7 +58,7 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
         for working_fluid in ["R1233zd(E)", "n-pentane", "MM"]:  
             cycle_config["refrigerant"] = working_fluid
             logger.info(f"Evaluating conceptual heat pump cycle for refrigerant: {cycle_config['refrigerant']}")
-            state = solve_cycle(cycle_config, general_config, verbose = True)
+            state = solve_cycle(cycle_config, general_config, verbose = False)
             perf = compute_performance(state, cycle_config, general_config)
 
             if generate_thdy_diagrams:
@@ -78,22 +79,6 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                 "eta": cycle_config["η_compr"],
                 "refrigerant": cycle_config["refrigerant"]
             }
-            MTW_cycle_config_print = {
-                "T_h_in": cycle_config["T_h_in"],
-                "T_c_in": cycle_config["T_c_in"],
-                "m_c": cycle_config["ṁ_c"],
-                "cp_c": cycle_config["cp_c"],
-                "m_h": cycle_config["ṁ_h"],
-                "cp_h": cycle_config["cp_h"],
-                "T_evap": state["T_ev"], #When using MTW code, I stick to MTW nomenclature, hence the difference in variable names
-                "PR": perf["PR"],
-                "dtsh": state["T_ref_1"] - state["T_ev"],
-                "dtsc": state["T_cond"] - state["T_ref_3"],
-                "T_co": state["T_c_out"],
-                "eta": cycle_config["η_compr"],
-                "refrigerant": cycle_config["refrigerant"]
-            }
-            print(f"MTW cycle config for {working_fluid}: {MTW_cycle_config_print}")
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore",
@@ -109,7 +94,6 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                 mtw_perf=MTW_cycle_performance_params[cycle_config["refrigerant"]],
             )
             overall_max_discrepancy = max(overall_max_discrepancy, max_discrepancy)
-            # print(f"MTW cycle config for {working_fluid}: {MTW_cycle_config}")
             make_thdy_plot(
                     state,
                     perf,

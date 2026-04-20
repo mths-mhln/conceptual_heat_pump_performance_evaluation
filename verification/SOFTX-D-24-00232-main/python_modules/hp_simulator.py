@@ -313,21 +313,19 @@ def rejection_hxc(flu,props,mdot,thi,mh,cph,n): # why in the world would you pus
     if (p_orc < flu.pc): # then subcritical cycle:
 
         # determine heat-source intermediate temperatures:
+        # Despite it being named ev, this is the condensation
+        # in refers to the inlet (from the refrigerant perspective), so closest to point 2, 
+        # out refers to the outlet, so closest to point 3
         th_ev_in = thi + mdot*(props[2,1] - props[2,3])/(mh*cph)
         th_ev_ou = thi + mdot*(props[2,2] - props[2,3])/(mh*cph)
-        print(f"mdot={mdot:.4f} kg/s")
-        print(f"props[:,0:2]={props[:,0:4]}")
-        print(f"th_ev_in={th_ev_in:.2f} K, th_ev_ou={th_ev_ou:.2f} K")
-        print(f"thi={thi:.2f} K")
-        print(f"tho={tho:.2f} K")
         # heat exchanger UA and pinch point calculation via discretisation:
         [UApc,pp_pc] = UA_sizing(flu,mdot,props[:,0:2],tho,mh,cph,n[0],0)
         [UAco,pp_co] = UA_sizing(flu,mdot,props[:,1:3],th_ev_in,mh,cph,n[1],0)
         if (th_ev_ou > thi):
             [UAsc,pp_sc] = UA_sizing(flu,mdot,props[:,2:4],th_ev_ou,mh,cph,n[2],1)
-        else:
-            UAsh  = 0
-            pp_sh = 999
+        else: # this was originally UAsh and pp_sc
+            UAsc  = 0
+            pp_sc = 999
         # store values in arrays:
         UA = np.array([UApc, UAco, UAsc])
         pp = np.array([pp_pc,pp_co,pp_sc]) 

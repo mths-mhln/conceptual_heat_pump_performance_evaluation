@@ -1252,49 +1252,61 @@ def make_COP_vs_eff_plot(X, Y, Z, cycle_config, output_dir="00_obtained_data/COP
     plt.close(fig3d)
 
 
-def make_PR_optimization_plot(
-    PR_values,
-    COP_values,
+def make_optimizer_progress_plot(
+    optimization_trace,
     cycle_config,
     output_dir="heat_pump_thermodynamic_diagrams",
-    best_PR=None,
-    best_COP=None,
     verbose=True,
 ):
-    """Save COP-vs-PR plot for all successful PR evaluations."""
-    if PR_values is None or COP_values is None:
+    """Save optimization progression plot for a single cycle solve."""
+    if not optimization_trace:
         return None
 
-    PR_arr = np.asarray(PR_values, dtype=float)
-    COP_arr = np.asarray(COP_values, dtype=float)
-    valid = np.isfinite(PR_arr) & np.isfinite(COP_arr)
-    if valid.sum() == 0:
+    eval_idx = np.asarray(optimization_trace.get("eval_idx", []), dtype=float)
+    objective = np.asarray(optimization_trace.get("objective", []), dtype=float)
+    failed = np.asarray(optimization_trace.get("failed", []), dtype=bool)
+    best_so_far = np.asarray(optimization_trace.get("best_so_far", []), dtype=float)
+
+    if eval_idx.size == 0 or objective.size == 0:
         return None
 
-    PR_arr = PR_arr[valid]
-    COP_arr = COP_arr[valid]
-    order = np.argsort(PR_arr)
-    PR_arr = PR_arr[order]
-    COP_arr = COP_arr[order]
+    # Plot in COP-equivalent space to avoid distorted scales from infeasible values.
+    # Valid points use COP = -objective (objective is minimized), infeasible are pinned to 0.
+    cop_eval = np.where(failed, 0.0, -objective)
+    if best_so_far.size == objective.size:
+        cop_best_so_far = np.maximum(0.0, -best_so_far)
+    else:
+        cop_best_so_far = np.maximum.accumulate(cop_eval)
+
+    n_valid = int(np.sum(~failed))
+    n_failed = int(np.sum(failed))
 
     _configure_matplotlib()
     refrigerant = cycle_config["refrigerant"]
-    fig, ax = plt.subplots(figsize=(9.5, 7.0))
+    fig_height = general_config.get("opt_progress_fig_height", 5.8)
+    fig, ax = plt.subplots(figsize=(10.0, fig_height))
 
-    ax.plot(PR_arr, COP_arr, color="#1a3a6b", lw=1.2, zorder=2)
-    ax.scatter(PR_arr, COP_arr, color="#1a3a6b", s=10, zorder=3)
+    valid_mask = ~failed
+    if np.any(valid_mask):
+        ax.scatter(eval_idx[valid_mask], cop_eval[valid_mask], s=10, alpha=0.45,
+                  color="#1a3a6b", label=rf"$\mathrm{{Valid\ candidate\ (n={n_valid})}}$")
+    if np.any(failed):
+        ax.scatter(eval_idx[failed], np.zeros(np.sum(failed)), s=12, alpha=0.8, marker="x",
+                  color="#d64545", label=rf"$\mathrm{{Infeasible\ candidate\ (m={n_failed})}}$")
 
-    if best_PR is not None and best_COP is not None and np.isfinite(best_PR) and np.isfinite(best_COP):
-        ax.scatter([best_PR], [best_COP], color="#d64545", s=40, zorder=4,
-                   label=rf"$\mathrm{{Optimum}}: \mathrm{{PR}}={best_PR:.3f},\ { _cop_type_to_latex('COP_turb')}={best_COP:.3f}$")
-        ax.legend(loc="best", fontsize=9, framealpha=0.85)
+    ax.plot(eval_idx, cop_best_so_far, color="black", lw=1.1,
+            label=r"$\mathrm{Best\ so\ far}$", zorder=3)
+    ax.axhline(0.0, color="#d64545", ls="--", lw=0.9, alpha=0.7)
 
-    ax.set_xlabel(r"$\mathrm{Pressure\ Ratio}\ [-]$")
+    ax.set_xlabel(r"$\mathrm{Objective\ evaluation}\ [-]$")
     ax.set_ylabel(r"$\mathrm{COP}_{\mathrm{turb}}\ [-]$")
     ax.grid(True, alpha=0.25)
+    ax.legend(loc="best", fontsize=9, framealpha=0.85)
+
+    fig.tight_layout()
 
     output_root = Path(output_dir)
-    output_path = output_root / refrigerant / f"PR Optimization - {refrigerant}.pdf"
+    output_path = output_root / refrigerant / f"Optimizer Progress - {refrigerant}.pdf"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=1000, bbox_inches="tight")
     if verbose:

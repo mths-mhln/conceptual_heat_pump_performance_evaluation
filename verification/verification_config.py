@@ -12,7 +12,7 @@ analysis_type = "single_configuration"
 # ===========================================
 T_h_in = 353.15             # [K] - 80 degC
 T_c_in = 287.15             # [K] - 15 degC (outside temp)
-ṁ_h = 42                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
+ṁ_h = 40                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
 cp_h = 1885                 # [J/kg/K] - steam at 250 degrees
 ṁ_c = 40                    # [kg/s] - arbitrarily chosen
 cp_c = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
@@ -28,6 +28,8 @@ near_critical_buffer_ratio = 1.05  # [-] thermodynamic properties near the criti
 ΔT_pp_min_evap = 10
 ΔT_pp_min_cond = 10
 Q_out_req = 200000
+
+
 
 cycle_config = {
     "T_h_in": T_h_in,
@@ -67,9 +69,4 @@ if analysis_type == "single_configuration":
         "ph_margin_h_right": 0.15,
         "ph_margin_p_bot": 0.1,
         "ph_margin_p_top": 0.2,
-        "de_popsize": 50,          # more individuals = better global coverage
-        "de_maxiter": 10000,         # ← this is your "many more iterations"
-        "de_tol": 1e-9,
-        "de_strategy": "best1bin",
-        "min_mref_threshold": 0.005,   # adjust to your typical system size (kg/s)
     }

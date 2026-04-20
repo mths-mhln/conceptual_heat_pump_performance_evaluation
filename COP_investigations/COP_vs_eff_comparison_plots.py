@@ -1,5 +1,7 @@
+import os
 import sys
-sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/05_conceptual_heat_pump_performance_evaluation/')
+cwd = os.getcwd()
+sys.path.append(f'{cwd}')
 
 import argparse
 from pathlib import Path
@@ -27,7 +29,7 @@ def _parse_metadata_from_filename(file_path: Path):
 
 
 def _find_saved_grid(data_root: Path, refrigerant: str, cop_key: str = "COP_turb"):
-	"""Find the saved NPZ sweep for a refrigerant inside COP_investigations/<refrigerant>/."""
+	"""Find the saved NPZ sweep for a refrigerant, preferring COP_investigations/<refrigerant>/data/."""
 	ref_dir = data_root / refrigerant
 	if not ref_dir.exists():
 		raise FileNotFoundError(
@@ -35,14 +37,17 @@ def _find_saved_grid(data_root: Path, refrigerant: str, cop_key: str = "COP_turb
 			f"Expected data in COP_investigations/{refrigerant}/"
 		)
 
-	exact = ref_dir / f"COP_vs_eff_{refrigerant}_{cop_key}.npz"
+	data_dir = ref_dir / "data"
+	search_dir = data_dir if data_dir.exists() else ref_dir
+
+	exact = search_dir / f"COP_vs_eff_{refrigerant}_{cop_key}.npz"
 	if exact.exists():
 		return exact
 
-	matches = sorted(ref_dir.glob(f"COP_vs_eff_{refrigerant}_COP_*.npz"))
+	matches = sorted(search_dir.glob(f"COP_vs_eff_{refrigerant}_COP_*.npz"))
 	if not matches:
 		raise FileNotFoundError(
-			f"No COP sweep files found for {refrigerant} in {ref_dir}. "
+			f"No COP sweep files found for {refrigerant} in {search_dir}. "
 			f"Expected file like COP_vs_eff_{refrigerant}_{cop_key}.npz"
 		)
 
@@ -56,7 +61,7 @@ def _find_saved_grid(data_root: Path, refrigerant: str, cop_key: str = "COP_turb
 
 def plot_side_by_side_contours(
 	data_dir="COP_investigations",
-	output_dir="COP_investigations/comparison",
+	output_dir="COP_investigations/00_comparison",
 	refrigerants=("CO2", "R1234ze(E)"),
 	cop_key="COP_turb",
 ):

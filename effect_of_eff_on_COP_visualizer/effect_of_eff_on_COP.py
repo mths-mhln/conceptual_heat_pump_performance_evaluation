@@ -1,9 +1,6 @@
-import sys
-sys.path.append('d:/nexus/02_learning/00_university_education/04_MSc_TUDelft/05_thesis_nexus/05_conceptual_heat_pump_performance_evaluation/')
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch
 import numpy as np
 
 from config import cycle_config, general_config
@@ -18,7 +15,6 @@ from visualization import (
 	_quality_isolines_ts,
 	_saturation_dome_ts,
 )
-
 
 logger = setup_logger()
 
@@ -684,7 +680,7 @@ def _plot_compressor_efficiency_overlay(pr_ref, output_dir="98_unpolished/custom
 	logger.info(f"Saved: {out_png}")
 
 
-def plot_single_cycle_custom_ts(output_dir="98_unpolished/custom_cycle_plots"):
+def plot_single_cycle_custom_ts(output_dir="effect_of_eff_on_COP_visualizer/plots"):
 	"""Generate only the compressor-efficiency TS overlay plot."""
 	_configure_matplotlib()
 

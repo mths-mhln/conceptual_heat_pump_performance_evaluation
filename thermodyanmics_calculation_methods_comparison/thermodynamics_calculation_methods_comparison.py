@@ -49,21 +49,30 @@ def _save_cop_heatmap(X, Y, Z, out_path, title, cop_key):
 
 def _resolve_existing_files(refrigerant, cop_key, output_dir):
     root = Path(output_dir) / refrigerant
-    fixed_path = root / f"COP_vs_eff_{refrigerant}_{cop_key}_fixedPR.npz"
+    data_root = root / "data"
+    fixed_path = data_root / f"COP_vs_eff_{refrigerant}_{cop_key}_fixedPR.npz"
+    fixed_legacy = root / f"COP_vs_eff_{refrigerant}_{cop_key}_fixedPR.npz"
 
     reopt_candidates = [
+        data_root / f"COP_vs_eff_{refrigerant}_{cop_key}_reoptimized.npz",
+        data_root / f"COP_vs_eff_{refrigerant}_{cop_key}.npz",  # original implementation filename
         root / f"COP_vs_eff_{refrigerant}_{cop_key}_reoptimized.npz",
-        root / f"COP_vs_eff_{refrigerant}_{cop_key}.npz",  # original implementation filename
+        root / f"COP_vs_eff_{refrigerant}_{cop_key}.npz",  # legacy location
     ]
     reopt_path = next((p for p in reopt_candidates if p.exists()), None)
 
     missing = []
-    if not fixed_path.exists():
+    if not fixed_path.exists() and not fixed_legacy.exists():
         missing.append(str(fixed_path))
     if reopt_path is None:
         missing.append("one of: " + ", ".join(str(p) for p in reopt_candidates))
 
-    return fixed_path, reopt_path, missing
+    if fixed_path.exists():
+        fixed_existing = fixed_path
+    else:
+        fixed_existing = fixed_legacy
+
+    return fixed_existing, reopt_path, missing
 
 
 def _compute_fixed_pr_file(refrigerant, cop_key, output_dir):
@@ -94,7 +103,7 @@ def _compute_fixed_pr_file(refrigerant, cop_key, output_dir):
         except Exception:
             Z[i, j] = np.nan
 
-    root = Path(output_dir) / refrigerant
+    root = Path(output_dir) / refrigerant / "data"
     root.mkdir(parents=True, exist_ok=True)
     fixed_path = root / f"COP_vs_eff_{refrigerant}_{cop_key}_fixedPR.npz"
     np.savez_compressed(fixed_path, X=X, Y=Y, Z=Z, PR=reference_pr)
@@ -137,7 +146,7 @@ def _compute_reoptimized_file(refrigerant, cop_key, output_dir):
         except Exception:
             Z[i, j] = np.nan
 
-    root = Path(output_dir) / refrigerant
+    root = Path(output_dir) / refrigerant / "data"
     root.mkdir(parents=True, exist_ok=True)
     reopt_path = root / f"COP_vs_eff_{refrigerant}_{cop_key}_reoptimized.npz"
     np.savez_compressed(reopt_path, X=X, Y=Y, Z=Z)
