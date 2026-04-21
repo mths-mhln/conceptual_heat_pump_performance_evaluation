@@ -22,21 +22,31 @@ start = timeit.default_timer()
 
 
 
-def main(perform_verification=True):
-    plot_saving_time = 0.0
+def main(perform_verification: bool = True) -> float:
+    """Run the configured analysis workflow for the conceptual heat pump model.
+
+    Args:
+        perform_verification: Whether to run verification checks before analysis.
+
+    Returns:
+        Total time spent rendering and saving plots, in seconds.
+    """
+    plot_saving_time: float = 0.0
 
     # Perform code verification:
     if perform_verification:
         verification(verification_table=True, generate_thdy_diagrams=False)
 
+    # Select which analysis branch to run from the global configuration.
     analysis_type = general_config["analysis_type"]
     if general_config.get("ignore_coolprop_warnings", False):
         warnings.filterwarnings("ignore", module=r"CoolProp(\\.|$)")
         warnings.filterwarnings("ignore", message=r".*CoolProp.*")
 
+    # Branch 1: solve one cycle, print KPIs, and export cycle-specific plots.
     if analysis_type == "single_configuration":
         logger.info("Evaluating conceptual heat pump cycle")
-        cycle_data = solve_cycle(cycle_config, general_config, verbose=False)
+        cycle_data = solve_cycle(cycle_config, general_config, verbose=True)
         perf = compute_performance(cycle_data, cycle_config, general_config)
         table = Table(title=f"Conceptual Heat Pump Cycle - {cycle_config['refrigerant']}", show_lines=False)
         table.add_column("Symbol", style="cyan", no_wrap=True)
@@ -90,9 +100,11 @@ def main(perform_verification=True):
         plot_saving_time += timeit.default_timer() - t_plot
         logger.info("Evaluation Completed")
 
+    # Branch 2: run parameter sweep to study COP sensitivity to component efficiency.
     elif analysis_type == "COP_vs_eff_investigation":
         run_cop_vs_eff_investigation(cycle_config, general_config, logger)
         
+    # Branch 3: generate empty fluid-property diagrams for one or more substances.
     elif analysis_type == "substance_thermodynamic_diagrams":
         substances = general_config.get("substances_to_plot", [cycle_config["refrigerant"]])
         logger.info(f"Generating empty thermodynamic diagrams for {len(substances)} substance(s)")
@@ -124,6 +136,7 @@ def main(perform_verification=True):
     return plot_saving_time
 
 if __name__ == "__main__":
+    # Compute pure evaluation runtime by subtracting plot-generation overhead.
     plot_saving_time = main(perform_verification=False)
     end = timeit.default_timer()
     elapsed = end - start

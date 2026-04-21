@@ -14,12 +14,28 @@ logger = setup_logger()
 _ABSTRACT_STATES = {}
 
 def _parse_backend_fluid(fluid_spec):
+    """Split a CoolProp fluid spec into backend and fluid name.
+
+    Args:
+        fluid_spec: Fluid identifier such as 'REFPROP::R1234ze(E)'.
+
+    Returns:
+        A (backend, fluid) tuple.
+    """
     if "::" in fluid_spec:
         backend, fluid = fluid_spec.split("::", 1)
         return backend, fluid
     return "REFPROP", fluid_spec
 
 def _get_abstract_state(fluid_spec):
+    """Return a cached CoolProp AbstractState for a fluid specification.
+
+    Args:
+        fluid_spec: Fluid identifier with an optional backend prefix.
+
+    Returns:
+        Cached CoolProp AbstractState instance.
+    """
     backend, fluid = _parse_backend_fluid(fluid_spec)
     key = (backend, fluid)
     if key not in _ABSTRACT_STATES:
@@ -27,6 +43,18 @@ def _get_abstract_state(fluid_spec):
     return _ABSTRACT_STATES[key]
 
 def _update_state_from_pair(state, in1, val1, in2, val2):
+    """Update a CoolProp AbstractState from a supported input pair.
+
+    Args:
+        state: CoolProp AbstractState to update.
+        in1: First input key, such as 'P' or 'T'.
+        val1: Value paired with in1.
+        in2: Second input key.
+        val2: Value paired with in2.
+
+    Returns:
+        None.
+    """
     pair = (in1, in2)
     if pair == ("P", "T"):
         state.update(CP.PT_INPUTS, val1, val2)
@@ -98,7 +126,14 @@ def _cp_props(*args):
 # Helpers
 # =======
 def _vapour_quality_scaler(Q):
-    """Clamp CoolProp quality to [0, 1] for single-phase regions."""
+    """Clamp vapor quality to [0, 1] for single-phase regions.
+
+    Args:
+        Q: Raw vapor quality value from CoolProp.
+
+    Returns:
+        Quality clipped to the physically meaningful range.
+    """
     if Q > 1:
         return 1
     elif Q < 0:
@@ -106,7 +141,18 @@ def _vapour_quality_scaler(Q):
     return Q
 
 def _isobar_segment(s_start, s_end, p, cycle_config, general_config):
-    """Return (s_range, T_range) along a constant-pressure path (TS diagram)."""
+    """Build a TS curve segment along a constant-pressure path.
+
+    Args:
+        s_start: Starting entropy value.
+        s_end: Ending entropy value.
+        p: Constant pressure for the segment.
+        cycle_config: Cycle configuration dictionary.
+        general_config: General runtime and plotting configuration.
+
+    Returns:
+        Tuple of entropy and temperature lists for the path.
+    """
     resolution = general_config["resolution"]
     refrigerant = cycle_config["refrigerant"]
     num_points = 150 if resolution == "low" else 1000
@@ -120,7 +166,16 @@ def _isobar_segment(s_start, s_end, p, cycle_config, general_config):
     return s_range.tolist(), T_range.tolist()
 
 def _isobar_h_segment(h_start, h_end, p):
-    """Return (h_range, p_range) along a constant-pressure path (PH diagram)."""
+    """Build a PH curve segment along a constant-pressure path.
+
+    Args:
+        h_start: Starting enthalpy value.
+        h_end: Ending enthalpy value.
+        p: Constant pressure for the segment.
+
+    Returns:
+        Tuple of enthalpy and pressure lists for the path.
+    """
     h_range = np.linspace(h_start, h_end, num=30)
     p_range = np.full(30, p)
     return h_range.tolist(), p_range.tolist()
@@ -128,6 +183,20 @@ def _isobar_h_segment(h_start, h_end, p):
 def _specific_heat_from_isobar_path(
     T_start, T_end, p, general_config, cycle_config, supercritical_cycle=False, uniform_sampling=False,
 ):
+    """Estimate heat transferred along an isobaric path.
+
+    Args:
+        T_start: Starting temperature.
+        T_end: Ending temperature.
+        p: Constant pressure along the path.
+        general_config: General runtime and plotting configuration.
+        cycle_config: Cycle configuration dictionary.
+        supercritical_cycle: Whether the cycle runs above the critical point.
+        uniform_sampling: Whether to use arc-length-based TS sampling.
+
+    Returns:
+        Estimated specific heat transfer in J/kg.
+    """
     num_points = 150 if general_config["resolution"] == "low" else 1000
     if supercritical_cycle or uniform_sampling:
         h_start = _cp_props("H", "P", p, "T", T_start, f"REFPROP::{cycle_config['refrigerant']}")
@@ -149,6 +218,18 @@ def _specific_heat_from_isobar_path(
     return heat
 
 def _sample_isobar_ts_uniform_arc(h_start, h_end, p, cycle_config, num_points=2000):
+    """Sample an isobar using near-uniform arc-length spacing in TS space.
+
+    Args:
+        h_start: Starting enthalpy.
+        h_end: Ending enthalpy.
+        p: Constant pressure.
+        cycle_config: Cycle configuration dictionary.
+        num_points: Requested number of output samples.
+
+    Returns:
+        Tuple of entropy, temperature, and enthalpy arrays.
+    """
     refrigerant = cycle_config["refrigerant"]
     n = max(num_points, 400)
     h_arr = np.linspace(h_start, h_end, n)
@@ -184,6 +265,21 @@ def _sample_isobar_ts_uniform_arc(h_start, h_end, p, cycle_config, num_points=20
 
 # New helpers for true minimum approach (counter-flow pinch anywhere)
 def _compute_min_approach_cond(ṁ_ref, h_ref_2, h_ref_3, p_ref_2, T_h_in, cp_h, ṁ_h, refrigerant):
+    """Compute the minimum condenser approach temperature for a candidate cycle.
+
+    Args:
+        ṁ_ref: Refrigerant mass flow rate.
+        h_ref_2: Refrigerant enthalpy at condenser inlet.
+        h_ref_3: Refrigerant enthalpy at condenser outlet.
+        p_ref_2: High-side refrigerant pressure.
+        T_h_in: Hot-side inlet temperature.
+        cp_h: Hot-side specific heat capacity.
+        ṁ_h: Hot-side mass flow rate.
+        refrigerant: Refrigerant name.
+
+    Returns:
+        Minimum temperature approach across the condenser, in K.
+    """
     if ṁ_ref <= 0:
         return np.inf
     Q_cond = ṁ_ref * (h_ref_2 - h_ref_3)
@@ -203,6 +299,21 @@ def _compute_min_approach_cond(ṁ_ref, h_ref_2, h_ref_3, p_ref_2, T_h_in, cp_h,
     return np.nanmin(delta_t)
 
 def _compute_min_approach_evap(ṁ_ref, h_ref_4, h_ref_1, p_ref_1, T_c_in, cp_c, ṁ_c, refrigerant):
+    """Compute the minimum evaporator approach temperature for a candidate cycle.
+
+    Args:
+        ṁ_ref: Refrigerant mass flow rate.
+        h_ref_4: Refrigerant enthalpy at evaporator inlet.
+        h_ref_1: Refrigerant enthalpy at evaporator outlet.
+        p_ref_1: Low-side refrigerant pressure.
+        T_c_in: Cold-side inlet temperature.
+        cp_c: Cold-side specific heat capacity.
+        ṁ_c: Cold-side mass flow rate.
+        refrigerant: Refrigerant name.
+
+    Returns:
+        Minimum temperature approach across the evaporator, in K.
+    """
     if ṁ_ref <= 0:
         return np.inf
     Q_evap = ṁ_ref * (h_ref_1 - h_ref_4)
@@ -225,15 +336,28 @@ def _compute_min_approach_evap(ṁ_ref, h_ref_4, h_ref_1, p_ref_1, T_c_in, cp_c,
 # EVOLUTIONARY GLOBAL OPTIMIZER (Differential Evolution)
 # ===================================================================
 def _run_global_de(objective, bounds, general_config, callback=None):
-    """Differential Evolution – replaces SHGO for true global search with many iterations.
-    Configurable via general_config keys:
-        de_popsize, de_maxiter, de_tol, de_strategy, de_init
+    """Run the global differential-evolution optimizer.
+
+    Args:
+        objective: Objective function to minimize.
+        bounds: Search bounds for each decision variable.
+        general_config: General runtime configuration.
+        callback: Optional optimizer callback.
+
+    Returns:
+        SciPy optimization result object.
     """
     de_popsize = int(general_config.get("de_popsize", 30))
     de_maxiter = int(general_config.get("de_maxiter", 1000))
     de_tol = float(general_config.get("de_tol", 1e-3))
     de_strategy = general_config.get("de_strategy", "best1bin")
     de_init = general_config.get("de_init", "latinhypercube")
+    if general_config.get("analysis_type") == "COP_vs_eff_investigation":
+        de_workers = -1
+        de_updating = "deferred"
+    else:
+        de_workers = 1
+        de_updating = "immediate"
 
     result = opt.differential_evolution(
         objective,
@@ -243,7 +367,8 @@ def _run_global_de(objective, bounds, general_config, callback=None):
         maxiter=de_maxiter,
         tol=de_tol,
         init=de_init,
-        workers=-1,          # CoolProp is not always thread-safe
+        workers=de_workers,
+        updating=de_updating,
         disp=False,
         polish=False,
         callback=callback,
@@ -258,6 +383,11 @@ def _run_global_de(objective, bounds, general_config, callback=None):
     return result
 
 def _create_optimization_trace():
+    """Create an empty optimization trace container.
+
+    Returns:
+        Dictionary used to track objective evaluations and best values.
+    """
     return {
         "eval_idx": [],
         "objective": [],
@@ -268,6 +398,17 @@ def _create_optimization_trace():
     }
 
 def _record_trace_point(optimization_trace, state, score, failed):
+    """Record one objective evaluation in the optimization trace.
+
+    Args:
+        optimization_trace: Mutable trace dictionary.
+        state: Mutable optimizer state counters.
+        score: Objective value for the current evaluation.
+        failed: Whether the candidate was infeasible.
+
+    Returns:
+        None.
+    """
     state["eval_counter"] += 1
     if np.isfinite(score) and score < state["best_score_seen"]:
         state["best_score_seen"] = score
@@ -277,6 +418,16 @@ def _record_trace_point(optimization_trace, state, score, failed):
     optimization_trace["best_so_far"].append(float(state["best_score_seen"]))
 
 def _de_trace_callback(optimization_trace, *args, **kwargs):
+    """Record the best value seen after a differential-evolution iteration.
+
+    Args:
+        optimization_trace: Mutable trace dictionary.
+        *args: Positional callback arguments from SciPy.
+        **kwargs: Keyword callback arguments from SciPy.
+
+    Returns:
+        False to keep the optimizer running.
+    """
     intermediate_result = kwargs.get("intermediate_result", None)
     if intermediate_result is None and len(args) > 0 and hasattr(args[0], "fun"):
         intermediate_result = args[0]
@@ -287,6 +438,18 @@ def _de_trace_callback(optimization_trace, *args, **kwargs):
     return False
 
 def _raw_objective(cycle_config, general_config, decision_variables, verbose, fixed_PR=None):
+    """Evaluate the negative COP objective for a cycle candidate.
+
+    Args:
+        cycle_config: Cycle configuration dictionary.
+        general_config: General runtime configuration.
+        decision_variables: Candidate variables for optimization.
+        verbose: Whether to log rejection reasons.
+        fixed_PR: Optional pressure ratio to hold fixed.
+
+    Returns:
+        Tuple of objective score, invalid-cycle flag, and cycle data or None.
+    """
     if fixed_PR is None:
         PR, T_ref_1_var, s_ref_1_var, T_ref_3 = decision_variables
     else:
@@ -306,6 +469,20 @@ def _raw_objective(cycle_config, general_config, decision_variables, verbose, fi
     return -compute_performance(cycle_data, cycle_config, general_config)["COP_turb"], False, cycle_data
 
 def _objective_with_trace(x, cycle_config, general_config, verbose, optimization_trace, trace_state, fixed_PR=None):
+    """Evaluate a candidate while updating the optimization trace.
+
+    Args:
+        x: Candidate decision vector.
+        cycle_config: Cycle configuration dictionary.
+        general_config: General runtime configuration.
+        verbose: Whether to log rejection reasons.
+        optimization_trace: Trace container to update.
+        trace_state: Mutable counters for the trace.
+        fixed_PR: Optional pressure ratio to hold fixed.
+
+    Returns:
+        Objective value for SciPy minimization.
+    """
     score, invalid_cycle, _ = _raw_objective(cycle_config, general_config, x, verbose, fixed_PR=fixed_PR)
     if score >= 0.05:  # invalid candidate
         _record_trace_point(optimization_trace, trace_state, score, True)
@@ -314,6 +491,20 @@ def _objective_with_trace(x, cycle_config, general_config, verbose, optimization
     return score
 
 def _objective_de(x, cycle_config, general_config, verbose, optimization_trace, trace_state, fixed_PR=None):
+    """Adapter that forwards a candidate to the traced objective.
+
+    Args:
+        x: Candidate decision vector.
+        cycle_config: Cycle configuration dictionary.
+        general_config: General runtime configuration.
+        verbose: Whether to log rejection reasons.
+        optimization_trace: Trace container to update.
+        trace_state: Mutable counters for the trace.
+        fixed_PR: Optional pressure ratio to hold fixed.
+
+    Returns:
+        Objective value for SciPy minimization.
+    """
     return _objective_with_trace(
         x,
         cycle_config,
@@ -325,10 +516,28 @@ def _objective_de(x, cycle_config, general_config, verbose, optimization_trace, 
     )
 
 def _de_callback_with_trace(*args, optimization_trace, **kwargs):
+    """Forward the SciPy callback to the internal trace recorder.
+
+    Args:
+        *args: Positional callback arguments from SciPy.
+        optimization_trace: Trace container to update.
+        **kwargs: Keyword callback arguments from SciPy.
+
+    Returns:
+        False to keep the optimizer running.
+    """
     return _de_trace_callback(optimization_trace, *args, **kwargs)
 
 # Cycle solver (FULL OPTIMISATION as requested – now using DE)
 def _candidate_bounds(cycle_config):
+    """Build optimization bounds from the cycle configuration.
+
+    Args:
+        cycle_config: Cycle configuration dictionary.
+
+    Returns:
+        Dictionary mapping decision-variable names to lower/upper bounds.
+    """
     refrigerant = cycle_config["refrigerant"]
     T_c_in = cycle_config["T_c_in"]
     T_h_in = cycle_config["T_h_in"]
@@ -346,7 +555,20 @@ def _candidate_bounds(cycle_config):
     }
 
 def evaluate_cycle_candidate(cycle_config, general_config, PR, T_ref_1_var, s_ref_1_var, T_ref_3, verbose=True):
-    """Evaluate one candidate cycle and return cycle data or None if it is impossible."""
+    """Evaluate one cycle candidate and reject infeasible states.
+
+    Args:
+        cycle_config: Cycle configuration dictionary.
+        general_config: General runtime configuration.
+        PR: Candidate pressure ratio.
+        T_ref_1_var: Candidate inlet temperature for state 1.
+        s_ref_1_var: Candidate inlet entropy for state 1.
+        T_ref_3: Candidate condenser outlet temperature.
+        verbose: Whether to log rejection reasons.
+
+    Returns:
+        Cycle-state dictionary for feasible candidates, otherwise None.
+    """
     refrigerant = cycle_config["refrigerant"]
     T_c_in = cycle_config["T_c_in"]
     T_h_in = cycle_config["T_h_in"]
@@ -452,8 +674,17 @@ def evaluate_cycle_candidate(cycle_config, general_config, PR, T_ref_1_var, s_re
         return None
 
 def _optimize_cycle(cycle_config, general_config, fixed_PR=None, verbose=True):
-    """Optimize the cycle or, when PR is supplied, optimize the remaining variables at that PR.
-    Now uses Differential Evolution with a small random penalty for nonfeasible cycles."""
+    """Optimize the heat-pump cycle using differential evolution.
+
+    Args:
+        cycle_config: Cycle configuration dictionary.
+        general_config: General runtime configuration.
+        fixed_PR: Optional pressure ratio to keep fixed.
+        verbose: Whether to log rejection reasons.
+
+    Returns:
+        Best feasible cycle-state dictionary.
+    """
     bounds = _candidate_bounds(cycle_config)
     optimization_trace = _create_optimization_trace()
     trace_state = {
@@ -509,13 +740,32 @@ def _optimize_cycle(cycle_config, general_config, fixed_PR=None, verbose=True):
         return best_cycle_data
 
 def solve_cycle(cycle_config, general_config, verbose=True):
-    """Optimize the cycle or, when PR is supplied, optimize the remaining variables at that PR."""
+    """Solve the configured cycle optimization problem.
+
+    Args:
+        cycle_config: Cycle configuration dictionary.
+        general_config: General runtime configuration.
+        verbose: Whether to log rejection reasons.
+
+    Returns:
+        Best feasible cycle-state dictionary.
+    """
     if "PR" in cycle_config:
         return _optimize_cycle(cycle_config, general_config, fixed_PR=float(cycle_config["PR"]), verbose=verbose)
     return _optimize_cycle(cycle_config, general_config, fixed_PR=None, verbose=verbose)
 
 # Performance metrics (unchanged)
 def compute_performance(cycle_data, cycle_config, general_config):
+    """Compute performance metrics from a solved cycle.
+
+    Args:
+        cycle_data: Solved cycle-state dictionary.
+        cycle_config: Cycle configuration dictionary.
+        general_config: General runtime configuration.
+
+    Returns:
+        Dictionary of performance metrics such as COP and power flows.
+    """
     s = cycle_data
     ṁ_h = cycle_config["ṁ_h"]
     cp_h = cycle_config["cp_h"]
@@ -551,6 +801,16 @@ def compute_performance(cycle_data, cycle_config, general_config):
 
 # Diagram data preparation (unchanged – fully compatible)
 def build_ts_data(cycle_data, cycle_config, general_config):
+    """Build T-s diagram data for the solved cycle.
+
+    Args:
+        cycle_data: Solved cycle-state dictionary.
+        cycle_config: Cycle configuration dictionary.
+        general_config: General runtime configuration.
+
+    Returns:
+        Dictionary with major and minor curve data for the TS diagram.
+    """
     s = cycle_data
     refrigerant = cycle_config["refrigerant"]
     T_h_in = cycle_config["T_h_in"]
@@ -616,6 +876,15 @@ def build_ts_data(cycle_data, cycle_config, general_config):
     )
 
 def build_ph_data(cycle_data, cycle_config):
+    """Build P-h diagram data for the solved cycle.
+
+    Args:
+        cycle_data: Solved cycle-state dictionary.
+        cycle_config: Cycle configuration dictionary.
+
+    Returns:
+        Dictionary with major and minor curve data for the PH diagram.
+    """
     s = cycle_data
     refrigerant = cycle_config["refrigerant"]
     p1, p2 = s["p_ref_1"], s["p_ref_2"]
