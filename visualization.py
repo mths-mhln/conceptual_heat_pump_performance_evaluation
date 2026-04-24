@@ -18,14 +18,6 @@ logger = setup_logger()
 # Utility
 # =======
 def _configure_matplotlib():
-    """Apply the shared Matplotlib style for all figures.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
     plt.rcParams.update({
         "text.usetex": True,
         "font.family": "serif",
@@ -41,30 +33,14 @@ def _configure_matplotlib():
 
 
 def _cop_type_to_latex(cop_key):
-    """Convert a COP key into a LaTeX label body.
-
-    Args:
-        cop_key: Identifier such as 'COP_turb'.
-
-    Returns:
-        LaTeX-ready label fragment.
-    """
     parts = cop_key.split("_", 1)
     if len(parts) == 2:
         return rf"\mathrm{{{parts[0]}}}_{{\mathrm{{{parts[1]}}}}}"
     return rf"\mathrm{{{cop_key}}}"
 
+
 def _q(out, *args, cycle_config):
-    """Query CoolProp for the configured refrigerant and fail softly.
 
-    Args:
-        out: Requested CoolProp output key.
-        *args: CoolProp state inputs.
-        cycle_config: Cycle configuration dictionary.
-
-    Returns:
-        Requested property value, or np.nan on failure.
-    """
     refrigerant = cycle_config["refrigerant"]
     try:
         return PropsSI(out, *args, f"REFPROP::{refrigerant}")
@@ -73,16 +49,6 @@ def _q(out, *args, cycle_config):
 
 
 def _verification_path_with_isenthalpic_expansion(verification_data, cycle_config, n_pts=80):
-    """Rebuild the verification-cycle expansion segment as isenthalpic.
-
-    Args:
-        verification_data: Raw verification state array.
-        cycle_config: Cycle configuration dictionary.
-        n_pts: Number of samples for the reconstructed segment.
-
-    Returns:
-        Tuple of temperature, pressure, enthalpy, and entropy arrays.
-    """
     T_arr = np.array(verification_data[0, :], dtype=float)
     p_arr = np.array(verification_data[1, :], dtype=float)
     h_arr = np.array(verification_data[2, :], dtype=float)
@@ -119,15 +85,6 @@ def _verification_path_with_isenthalpic_expansion(verification_data, cycle_confi
 # Axis-bound calculation
 # ======================
 def _cycle_bounds_ts(cycle_data, cycle_config):
-    """Compute TS axis bounds for the current cycle.
-
-    Args:
-        cycle_data: Solved cycle-state dictionary.
-        cycle_config: Cycle configuration dictionary.
-
-    Returns:
-        Tuple of (s_min, s_max, T_min, T_max).
-    """
     ts_margin_s_left = general_config.get("ts_margin_s_left", 0.2)
     ts_margin_s_right = general_config.get("ts_margin_s_right", 0.2)
     ts_margin_T_bot = general_config.get("ts_margin_T_bot", 0.2)
@@ -155,15 +112,6 @@ def _cycle_bounds_ts(cycle_data, cycle_config):
 
 
 def _cycle_bounds_ph(cycle_data, cycle_config):
-    """Compute PH axis bounds for the current cycle.
-
-    Args:
-        cycle_data: Solved cycle-state dictionary.
-        cycle_config: Cycle configuration dictionary.
-
-    Returns:
-        Tuple of (h_min, h_max, p_min, p_max).
-    """
     ph_margin_h_left = general_config.get("ph_margin_h_left", 0.3)
     ph_margin_h_right = general_config.get("ph_margin_h_right", 0.15)
     ph_margin_p_bot = general_config.get("ph_margin_p_bot", 0.1)
@@ -197,15 +145,6 @@ def _cycle_bounds_ph(cycle_data, cycle_config):
 # Saturation dome
 # ===============
 def _saturation_dome_ts(cycle_config, n=400):
-    """Build the saturation dome for a TS diagram.
-
-    Args:
-        cycle_config: Cycle configuration dictionary.
-        n: Number of samples along the dome.
-
-    Returns:
-        Tuple of entropy and temperature arrays.
-    """
     p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
@@ -218,15 +157,6 @@ def _saturation_dome_ts(cycle_config, n=400):
 
 
 def _saturation_dome_ph(cycle_config, n=400):
-    """Build the saturation dome for a PH diagram.
-
-    Args:
-        cycle_config: Cycle configuration dictionary.
-        n: Number of samples along the dome.
-
-    Returns:
-        Tuple of enthalpy and pressure arrays.
-    """
     p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
     p_trip = _q("P", "T", T_trip*1.001, "Q", 0, cycle_config=cycle_config)
@@ -242,18 +172,6 @@ def _saturation_dome_ph(cycle_config, n=400):
 # Isoline computation
 # ===================
 def _quality_isolines_ts(T_lo, T_hi, cycle_config, n_lines=9, n_pts=200):
-    """Build vapor-quality isolines for the TS diagram.
-
-    Args:
-        T_lo: Lower temperature bound.
-        T_hi: Upper temperature bound.
-        cycle_config: Cycle configuration dictionary.
-        n_lines: Number of isolines.
-        n_pts: Number of points per line.
-
-    Returns:
-        List of (s, T, Q) isoline tuples.
-    """
     T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_arr  = np.linspace(max(T_lo, T_trip*1.001), min(T_hi, T_crit*0.9999), n_pts)
@@ -267,18 +185,6 @@ def _quality_isolines_ts(T_lo, T_hi, cycle_config, n_lines=9, n_pts=200):
 
 
 def _quality_isolines_ph(p_lo, p_hi, cycle_config, n_lines=9, n_pts=200):
-    """Build vapor-quality isolines for the PH diagram.
-
-    Args:
-        p_lo: Lower pressure bound.
-        p_hi: Upper pressure bound.
-        cycle_config: Cycle configuration dictionary.
-        n_lines: Number of isolines.
-        n_pts: Number of points per line.
-
-    Returns:
-        List of (h, p, Q) isoline tuples.
-    """
     p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
     p_trip = _q("P", "T", T_trip*1.001, "Q", 0, cycle_config=cycle_config)
@@ -293,20 +199,6 @@ def _quality_isolines_ph(p_lo, p_hi, cycle_config, n_lines=9, n_pts=200):
 
 
 def _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_lines=12, n_pts=200):
-    """Build constant-pressure isolines for the TS diagram.
-
-    Args:
-        s_lo: Lower entropy bound.
-        s_hi: Upper entropy bound.
-        T_lo: Lower temperature bound.
-        T_hi: Upper temperature bound.
-        cycle_config: Cycle configuration dictionary.
-        n_lines: Number of isolines.
-        n_pts: Number of points per line.
-
-    Returns:
-        List of (s, T, p) isoline tuples.
-    """
     p_crit = _q("Pcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
@@ -348,20 +240,6 @@ def _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_lines=12, n_pts=200
 
 
 def _isenthalp_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_lines=18, n_pts=200):
-    """Build constant-enthalpy isolines for the TS diagram.
-
-    Args:
-        s_lo: Lower entropy bound.
-        s_hi: Upper entropy bound.
-        T_lo: Lower temperature bound.
-        T_hi: Upper temperature bound.
-        cycle_config: Cycle configuration dictionary.
-        n_lines: Number of isolines.
-        n_pts: Number of points per line.
-
-    Returns:
-        List of (s, T, h) isoline tuples.
-    """
     # Sample h range from corners of the visible TS window
     h_samples = []
     for s in np.linspace(s_lo, s_hi, 6):
@@ -386,20 +264,6 @@ def _isenthalp_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_lines=18, n_pts=
 
 
 def _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_lines=18, n_pts=200):
-    """Build constant-temperature isolines for the PH diagram.
-
-    Args:
-        h_lo: Lower enthalpy bound.
-        h_hi: Upper enthalpy bound.
-        p_lo: Lower pressure bound.
-        p_hi: Upper pressure bound.
-        cycle_config: Cycle configuration dictionary.
-        n_lines: Number of isolines.
-        n_pts: Number of points per line.
-
-    Returns:
-        List of (h, p, T) isoline tuples.
-    """
     T_crit = _q("Tcrit", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_trip = _q("Ttriple", "T", 300, "Q", 1, cycle_config=cycle_config)
     T_vals = np.linspace(T_trip*1.05, T_crit*1.5, n_lines)
@@ -437,20 +301,6 @@ def _isotherm_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_lines=18, n_pts=2
 
 
 def _isentrop_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_lines=12, n_pts=200):
-    """Build constant-entropy isolines for the PH diagram.
-
-    Args:
-        h_lo: Lower enthalpy bound.
-        h_hi: Upper enthalpy bound.
-        p_lo: Lower pressure bound.
-        p_hi: Upper pressure bound.
-        cycle_config: Cycle configuration dictionary.
-        n_lines: Number of isolines.
-        n_pts: Number of points per line.
-
-    Returns:
-        List of (h, p, s) isoline tuples.
-    """
     s_samples = []
     for h in np.linspace(h_lo, h_hi, 6):
         for p in np.geomspace(max(p_lo, 1e3), p_hi, 6):
@@ -475,22 +325,6 @@ def _isentrop_lines_ph(h_lo, h_hi, p_lo, p_hi, cycle_config, n_lines=12, n_pts=2
 # Label placement
 # ===============
 def _label_angle(x_data, y_data, idx, xl, xh, yl, yh, yscale, ax):
-    """Compute the rotation angle for a line label.
-
-    Args:
-        x_data: X coordinates for the line.
-        y_data: Y coordinates for the line.
-        idx: Index where the label is placed.
-        xl: Lower x-axis bound.
-        xh: Upper x-axis bound.
-        yl: Lower y-axis bound.
-        yh: Upper y-axis bound.
-        yscale: Y-axis scale name.
-        ax: Matplotlib axes used for size information.
-
-    Returns:
-        Label angle in degrees.
-    """
     x = np.array(x_data)
     y = np.array(y_data)
     # normalise to [0,1] axes coordinates
@@ -519,18 +353,6 @@ def _label_angle(x_data, y_data, idx, xl, xh, yl, yh, yscale, ax):
 
 
 def _label_point(ax, x_data, y_data, frac, yscale='linear'):
-    """Pick a label position and angle on a line.
-
-    Args:
-        ax: Matplotlib axes used for bounds and scaling.
-        x_data: X coordinates for the line.
-        y_data: Y coordinates for the line.
-        frac: Relative position along the line where the label should go.
-        yscale: Y-axis scale name.
-
-    Returns:
-        Tuple of (x, y, angle, in_bounds) or None when the line is too short.
-    """
     x = np.array(x_data)
     y = np.array(y_data)
     if len(x) < 4:
@@ -544,19 +366,6 @@ def _label_point(ax, x_data, y_data, frac, yscale='linear'):
 
 
 def _put_label(ax, x_val, y_val, ang, label, color):
-    """Draw a styled label at a line position.
-
-    Args:
-        ax: Matplotlib axes to draw on.
-        x_val: Label x position.
-        y_val: Label y position.
-        ang: Label rotation angle.
-        label: Label text.
-        color: Label color.
-
-    Returns:
-        None.
-    """
     ax.text(x_val, y_val, label,
             color=color, fontsize=10, rotation=ang, rotation_mode='anchor',
             ha='center', va='center',
@@ -566,21 +375,6 @@ def _put_label(ax, x_val, y_val, ang, label, color):
 
 def _draw_isolines_labeled(ax, lines, color, frac, fmt_short, fmt_named,
                            yscale='linear', flip_q1=False):
-    """Draw isolines and place a single label on the best visible line.
-
-    Args:
-        ax: Matplotlib axes to draw on.
-        lines: Sequence of isoline tuples.
-        color: Line and label color.
-        frac: Relative placement along each line for the label.
-        fmt_short: Formatter for non-highlighted labels.
-        fmt_named: Formatter for the highlighted label.
-        yscale: Y-axis scale name.
-        flip_q1: Whether to flip the quality-1 label orientation.
-
-    Returns:
-        None.
-    """
     if not lines:
         return
 
@@ -613,18 +407,6 @@ def _draw_isolines_labeled(ax, lines, color, frac, fmt_short, fmt_named,
 # Expansion lines + legend
 # ========================
 def _add_expansion_lines(ax, cycle_data, diagram_type, cycle_config, include_verification=False):
-    """Add turbine-expansion reference lines and legend entries.
-
-    Args:
-        ax: Matplotlib axes to draw on.
-        cycle_data: Solved cycle-state dictionary.
-        diagram_type: Either 'TS' or 'PH'.
-        cycle_config: Cycle configuration dictionary.
-        include_verification: Whether to add the verification-cycle legend entry.
-
-    Returns:
-        None.
-    """
     s     = cycle_data
     p_exp = np.linspace(s["p_ref_3"], s["p_ref_1"], 150)
     col   = "#02220E"
@@ -685,16 +467,6 @@ def _add_expansion_lines(ax, cycle_data, diagram_type, cycle_config, include_ver
 # Cycle node labels (station numbers)
 # ====================================
 def _add_node_labels(ax, cycle_data, diagram_type):
-    """Add station number labels to the four cycle nodes.
-
-    Args:
-        ax: Matplotlib axes to draw on.
-        cycle_data: Solved cycle-state dictionary.
-        diagram_type: Either 'TS' or 'PH'.
-
-    Returns:
-        None.
-    """
     node_positions = [
         (cycle_data["s_ref_1"], cycle_data["T_ref_1"], cycle_data["h_ref_1"], cycle_data["p_ref_1"], "1"),
         (cycle_data["s_ref_2"], cycle_data["T_ref_2"], cycle_data["h_ref_2"], cycle_data["p_ref_2"], "2"),
@@ -762,18 +534,6 @@ def _add_node_labels(ax, cycle_data, diagram_type):
 # Arrow / endpoint label helpers (TS)
 # ===================================
 def _add_mid_arrow(ax, xv, yv, color, frac=0.18):
-    """Add a small directional arrow in the middle of a line.
-
-    Args:
-        ax: Matplotlib axes to draw on.
-        xv: X coordinates of the line.
-        yv: Y coordinates of the line.
-        color: Arrow color.
-        frac: Arrow length relative to the first segment length.
-
-    Returns:
-        None.
-    """
     if len(xv) < 2: return
     dx, dy = xv[1]-xv[0], yv[1]-yv[0]
     if np.isclose(dx,0) and np.isclose(dy,0): return
@@ -784,20 +544,6 @@ def _add_mid_arrow(ax, xv, yv, color, frac=0.18):
 
 
 def _add_endpoint_labels(ax, xv, yv, lbl0, lbl1, color, side=1):
-    """Add labels at both endpoints of a polyline.
-
-    Args:
-        ax: Matplotlib axes to draw on.
-        xv: X coordinates of the line.
-        yv: Y coordinates of the line.
-        lbl0: Label for the start point.
-        lbl1: Label for the end point.
-        color: Label color.
-        side: Offset direction used to avoid overlap.
-
-    Returns:
-        None.
-    """
     if len(xv) < 2: return
     ps = np.array([xv[0], yv[0]], dtype=float)
     pe = np.array([xv[1], yv[1]], dtype=float)
@@ -822,15 +568,6 @@ def _add_endpoint_labels(ax, xv, yv, lbl0, lbl1, color, side=1):
 # Performance box
 # ===============
 def _draw_perf_box(ax, perf):
-    """Draw a compact performance summary box.
-
-    Args:
-        ax: Matplotlib axes to draw on.
-        perf: Performance-metric dictionary.
-
-    Returns:
-        None.
-    """
     txt = (
         rf"$\begin{{array}}{{lrl}}"
         rf"\multicolumn{{3}}{{c}}{{\mathrm{{Performance}}}} \\\hline "
@@ -849,16 +586,6 @@ def _draw_perf_box(ax, perf):
 
 
 def _compute_turbine_expansion_curve(cycle_data, cycle_config, n=220):
-    """Compute a curved turbine-expansion path.
-
-    Args:
-        cycle_data: Solved cycle-state dictionary.
-        cycle_config: Cycle configuration dictionary.
-        n: Number of pressure samples.
-
-    Returns:
-        Tuple of pressure, enthalpy, entropy, and temperature arrays, or None.
-    """
     eta_turb = cycle_config.get("η_turb", None)
     if eta_turb is None:
         return None
@@ -892,16 +619,6 @@ def _compute_turbine_expansion_curve(cycle_data, cycle_config, n=220):
 
 
 def _compute_compressor_curve(cycle_data, cycle_config, n=220):
-    """Compute a curved compressor path using the configured efficiency.
-
-    Args:
-        cycle_data: Solved cycle-state dictionary.
-        cycle_config: Cycle configuration dictionary.
-        n: Number of pressure samples.
-
-    Returns:
-        Tuple of pressure, enthalpy, entropy, and temperature arrays, or None.
-    """
     eta_compr = cycle_config.get("η_compr", None)
     if eta_compr is None:
         return None
@@ -910,17 +627,6 @@ def _compute_compressor_curve(cycle_data, cycle_config, n=220):
 
 
 def _compute_compressor_curve_for_eta(cycle_data, cycle_config, eta_compr, n=220):
-    """Compute a compressor path for a specific efficiency value.
-
-    Args:
-        cycle_data: Solved cycle-state dictionary.
-        cycle_config: Cycle configuration dictionary.
-        eta_compr: Compressor efficiency to evaluate.
-        n: Number of pressure samples.
-
-    Returns:
-        Tuple of pressure, enthalpy, entropy, and temperature arrays, or None.
-    """
     if eta_compr is None:
         return None
 
@@ -956,19 +662,6 @@ def _compute_compressor_curve_for_eta(cycle_data, cycle_config, eta_compr, n=220
 
 
 def _find_expansion_segment_index(x_arr, y_arr, x3, y3, x4, y4):
-    """Find the array segment that matches the 3->4 cycle branch.
-
-    Args:
-        x_arr: X coordinates of the polyline.
-        y_arr: Y coordinates of the polyline.
-        x3: X coordinate of state 3.
-        y3: Y coordinate of state 3.
-        x4: X coordinate of state 4.
-        y4: Y coordinate of state 4.
-
-    Returns:
-        Index of the matching segment, or None if not found.
-    """
     x = np.asarray(x_arr)
     y = np.asarray(y_arr)
     if len(x) < 2:
@@ -988,17 +681,6 @@ def _find_expansion_segment_index(x_arr, y_arr, x3, y3, x4, y4):
 
 
 def _plot_cycle_with_curved_expansion_ts(ax, cycle_data, ts_data, cycle_config):
-    """Plot the TS cycle path with curved compressor and turbine branches.
-
-    Args:
-        ax: Matplotlib axes to draw on.
-        cycle_data: Solved cycle-state dictionary.
-        ts_data: Precomputed TS diagram data dictionary.
-        cycle_config: Cycle configuration dictionary.
-
-    Returns:
-        None.
-    """
     x = np.asarray(ts_data["minor"]["s"])
     y = np.asarray(ts_data["minor"]["T"])
     idx_comp = _find_expansion_segment_index(
@@ -1034,17 +716,6 @@ def _plot_cycle_with_curved_expansion_ts(ax, cycle_data, ts_data, cycle_config):
 
 
 def _plot_cycle_with_curved_expansion_ph(ax, cycle_data, ph_data, cycle_config):
-    """Plot the PH cycle path with curved compressor and turbine branches.
-
-    Args:
-        ax: Matplotlib axes to draw on.
-        cycle_data: Solved cycle-state dictionary.
-        ph_data: Precomputed PH diagram data dictionary.
-        cycle_config: Cycle configuration dictionary.
-
-    Returns:
-        None.
-    """
     x = np.asarray(ph_data["minor"]["h"])
     y = np.asarray(ph_data["minor"]["p"])
     idx_comp = _find_expansion_segment_index(
@@ -1094,18 +765,6 @@ COL_VERIFICATION = '#0d1f3c' # very dark slate blue (for verification/reference 
 # TS renderer
 # ===========
 def _make_plot_ts(cycle_data, perf, ts_data, cycle_config, verification_data=None):
-    """Create the full TS diagram for a solved cycle.
-
-    Args:
-        cycle_data: Solved cycle-state dictionary.
-        perf: Performance-metric dictionary.
-        ts_data: Precomputed TS diagram data dictionary.
-        cycle_config: Cycle configuration dictionary.
-        verification_data: Optional verification-cycle data array.
-
-    Returns:
-        Matplotlib figure object.
-    """
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
     resolution = general_config.get("resolution", "low")
@@ -1223,18 +882,6 @@ def _make_plot_ts(cycle_data, perf, ts_data, cycle_config, verification_data=Non
 # PH renderer
 # ===========
 def _make_plot_ph(cycle_data, perf, ph_data, cycle_config, verification_data=None):
-    """Create the full PH diagram for a solved cycle.
-
-    Args:
-        cycle_data: Solved cycle-state dictionary.
-        perf: Performance-metric dictionary.
-        ph_data: Precomputed PH diagram data dictionary.
-        cycle_config: Cycle configuration dictionary.
-        verification_data: Optional verification-cycle data array.
-
-    Returns:
-        Matplotlib figure object.
-    """
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
     resolution = general_config.get("resolution", "low")
@@ -1331,14 +978,6 @@ def _make_plot_ph(cycle_data, perf, ph_data, cycle_config, verification_data=Non
 
 
 def _make_empty_plot_ts(cycle_config):
-    """Create an empty TS property diagram for a refrigerant.
-
-    Args:
-        cycle_config: Cycle configuration dictionary.
-
-    Returns:
-        Matplotlib figure object.
-    """
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
     resolution = general_config.get("resolution", "low")
@@ -1409,14 +1048,6 @@ def _make_empty_plot_ts(cycle_config):
 
 
 def _make_empty_plot_ph(cycle_config):
-    """Create an empty PH property diagram for a refrigerant.
-
-    Args:
-        cycle_config: Cycle configuration dictionary.
-
-    Returns:
-        Matplotlib figure object.
-    """
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
     resolution = general_config.get("resolution", "low")
@@ -1504,22 +1135,6 @@ def make_thdy_plot(
     verification_data=None,
     verbose=True,
 ):
-    """Create and save a TS or PH thermodynamic cycle diagram.
-
-    Args:
-        cycle_data: Solved cycle-state dictionary.
-        perf: Performance-metric dictionary.
-        diagram_type: Diagram selector ('TS' or 'PH').
-        cycle_config: Cycle configuration dictionary.
-        output_dir: Directory where the figure should be saved.
-        ts_data: Optional TS diagram data dictionary.
-        ph_data: Optional PH diagram data dictionary.
-        verification_data: Optional verification-cycle data array.
-        verbose: Whether to log the saved output path.
-
-    Returns:
-        Matplotlib figure object.
-    """
     refrigerant = cycle_config["refrigerant"]
     _configure_matplotlib()
     fig = _make_plot_ts(cycle_data, perf, ts_data, cycle_config, verification_data=verification_data) if diagram_type == "TS" \
@@ -1534,17 +1149,6 @@ def make_thdy_plot(
 
 
 def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_thermodynamic_diagrams", verbose=True):
-    """Create and save an empty TS or PH diagram for a refrigerant.
-
-    Args:
-        diagram_type: Diagram selector ('TS' or 'PH').
-        cycle_config: Cycle configuration dictionary.
-        output_dir: Directory where the figure should be saved.
-        verbose: Whether to log the saved output path.
-
-    Returns:
-        Matplotlib figure object.
-    """
     refrigerant = cycle_config["refrigerant"]
     _configure_matplotlib()
     fig = _make_empty_plot_ts(cycle_config) if diagram_type == "TS" else _make_empty_plot_ph(cycle_config)
@@ -1561,18 +1165,6 @@ def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_therm
 # Public entry point for COP_vs_eff_investigation
 # ===============================================
 def make_COP_vs_eff_plot(X, Y, Z, cycle_config, output_dir="00_obtained_data/COP_investigations"):
-    """Create and save COP-vs-efficiency contour and surface plots.
-
-    Args:
-        X: 2D meshgrid for turbine efficiency.
-        Y: 2D meshgrid for compressor efficiency.
-        Z: 2D COP values on the same grid.
-        cycle_config: Cycle configuration dictionary.
-        output_dir: Directory where the figures should be saved.
-
-    Returns:
-        None.
-    """
     _configure_matplotlib()      
     refrigerant = cycle_config["refrigerant"]
     output_path = Path(output_dir) / refrigerant
@@ -1630,17 +1222,6 @@ def make_optimizer_progress_plot(
     output_dir="heat_pump_thermodynamic_diagrams",
     verbose=True,
 ):
-    """Create and save the optimization progress plot.
-
-    Args:
-        optimization_trace: Trace dictionary from the solver.
-        cycle_config: Cycle configuration dictionary.
-        output_dir: Directory where the figure should be saved.
-        verbose: Whether to log the saved output path.
-
-    Returns:
-        Matplotlib figure object, or None when no trace data is available.
-    """
     if not optimization_trace:
         return None
 

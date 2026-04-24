@@ -24,17 +24,51 @@ from logger import setup_logger
 logger = setup_logger()
 _ABSTRACT_STATES = {}
 def _parse_backend_fluid(fluid_spec):
+    """Function _parse_backend_fluid.
+
+    Arguments
+    ---------
+    fluid_spec : Any
+
+    Returns
+    -------
+    Any
+    """
     if "::" in fluid_spec:
         backend, fluid = fluid_spec.split("::", 1)
         return backend, fluid
     return "REFPROP", fluid_spec
 def _get_abstract_state(fluid_spec):
+    """Function _get_abstract_state.
+
+    Arguments
+    ---------
+    fluid_spec : Any
+
+    Returns
+    -------
+    Any
+    """
     backend, fluid = _parse_backend_fluid(fluid_spec)
     key = (backend, fluid)
     if key not in _ABSTRACT_STATES:
         _ABSTRACT_STATES[key] = CP.AbstractState(backend, fluid)
     return _ABSTRACT_STATES[key]
 def _update_state_from_pair(state, in1, val1, in2, val2):
+    """Function _update_state_from_pair.
+
+    Arguments
+    ---------
+    state : Any
+    in1 : Any
+    val1 : Any
+    in2 : Any
+    val2 : Any
+
+    Returns
+    -------
+    Any
+    """
     pair = (in1, in2)
     if pair == ("P", "T"):
         state.update(CP.PT_INPUTS, val1, val2)
@@ -59,11 +93,12 @@ def _update_state_from_pair(state, in1, val1, in2, val2):
     else:
         raise NotImplementedError(f"Unsupported input pair for AbstractState: {pair}")
 def _cp_props(*args):
-    """AbstractState-backed PropsSI replacement for this module.
-    Supports the signatures used in this file:
-    - _cp_props(output, fluid)
-    - _cp_props(output, in1, val1, in2, val2, fluid)
-    """
+"""AbstractState-backed PropsSI replacement for this module.
+
+Returns
+-------
+Any
+"""
     try:
         if len(args) == 2:
             output, fluid = args
@@ -96,14 +131,36 @@ def _cp_props(*args):
 # Helpers
 # =======
 def _vapour_quality_scaler(Q):
-    """Clamp CoolProp quality to [0, 1] for single-phase regions."""
+"""Clamp CoolProp quality to [0, 1] for single-phase regions.
+
+Arguments
+---------
+Q : Any
+
+Returns
+-------
+Any
+"""
     if Q > 1:
         return 1
     elif Q < 0:
         return 0
     return Q
 def _isobar_segment(s_start, s_end, p, cycle_config, general_config):
-    """Return (s_range, T_range) along a constant-pressure path (TS diagram)."""
+"""Return (s_range, T_range) along a constant-pressure path (TS diagram).
+
+Arguments
+---------
+s_start : Any
+s_end : Any
+p : Any
+cycle_config : Any
+general_config : Any
+
+Returns
+-------
+Any
+"""
     resolution = general_config["resolution"]
     refrigerant = cycle_config["refrigerant"]
     num_points = 150 if resolution == "low" else 1000
@@ -116,13 +173,40 @@ def _isobar_segment(s_start, s_end, p, cycle_config, general_config):
             pass
     return s_range.tolist(), T_range.tolist()
 def _isobar_h_segment(h_start, h_end, p):
-    """Return (h_range, p_range) along a constant-pressure path (PH diagram)."""
+"""Return (h_range, p_range) along a constant-pressure path (PH diagram).
+
+Arguments
+---------
+h_start : Any
+h_end : Any
+p : Any
+
+Returns
+-------
+Any
+"""
     h_range = np.linspace(h_start, h_end, num=30)
     p_range = np.full(30, p)
     return h_range.tolist(), p_range.tolist()
 def _specific_heat_from_isobar_path(
     T_start, T_end, p, general_config, cycle_config, supercritical_cycle=False, uniform_sampling=False,
 ):
+    """Function _specific_heat_from_isobar_path.
+
+    Arguments
+    ---------
+    T_start : Any
+    T_end : Any
+    p : Any
+    general_config : Any
+    cycle_config : Any
+    supercritical_cycle : Any
+    uniform_sampling : Any
+
+    Returns
+    -------
+    Any
+    """
     num_points = 150 if general_config["resolution"] == "low" else 1000
     if supercritical_cycle or uniform_sampling:
         h_start = _cp_props("H", "P", p, "T", T_start, f"REFPROP::{cycle_config['refrigerant']}")
@@ -143,6 +227,20 @@ def _specific_heat_from_isobar_path(
             pass
     return heat
 def _sample_isobar_ts_uniform_arc(h_start, h_end, p, cycle_config, num_points=2000):
+    """Function _sample_isobar_ts_uniform_arc.
+
+    Arguments
+    ---------
+    h_start : Any
+    h_end : Any
+    p : Any
+    cycle_config : Any
+    num_points : Any
+
+    Returns
+    -------
+    Any
+    """
     refrigerant = cycle_config["refrigerant"]
     n = max(num_points, 400)
     h_arr = np.linspace(h_start, h_end, n)
@@ -176,6 +274,17 @@ def _sample_isobar_ts_uniform_arc(h_start, h_end, p, cycle_config, num_points=20
     h_uniform = np.interp(arc_uniform, arc, h_valid)
     return s_uniform, T_uniform, h_uniform
 def _check_second_derivative_sign(s_arr, T_arr):
+    """Function _check_second_derivative_sign.
+
+    Arguments
+    ---------
+    s_arr : Any
+    T_arr : Any
+
+    Returns
+    -------
+    Any
+    """
     dT_ds = np.gradient(T_arr, s_arr)
     d2T_ds2 = np.gradient(dT_ds, s_arr)
     if np.all(d2T_ds2 > 0):
@@ -186,6 +295,23 @@ def _check_second_derivative_sign(s_arr, T_arr):
         return 0
 # New helpers for true minimum approach (counter-flow pinch anywhere)
 def _compute_min_approach_cond(ṁ_ref, h_ref_2, h_ref_3, p_ref_2, T_h_in, cp_h, ṁ_h, refrigerant):
+    """Function _compute_min_approach_cond.
+
+    Arguments
+    ---------
+    ṁ_ref : Any
+    h_ref_2 : Any
+    h_ref_3 : Any
+    p_ref_2 : Any
+    T_h_in : Any
+    cp_h : Any
+    ṁ_h : Any
+    refrigerant : Any
+
+    Returns
+    -------
+    Any
+    """
     if ṁ_ref <= 0:
         return np.inf
     Q_cond = ṁ_ref * (h_ref_2 - h_ref_3)
@@ -204,6 +330,23 @@ def _compute_min_approach_cond(ṁ_ref, h_ref_2, h_ref_3, p_ref_2, T_h_in, cp_h,
             pass
     return np.nanmin(delta_t)
 def _compute_min_approach_evap(ṁ_ref, h_ref_4, h_ref_1, p_ref_1, T_c_in, cp_c, ṁ_c, refrigerant):
+    """Function _compute_min_approach_evap.
+
+    Arguments
+    ---------
+    ṁ_ref : Any
+    h_ref_4 : Any
+    h_ref_1 : Any
+    p_ref_1 : Any
+    T_c_in : Any
+    cp_c : Any
+    ṁ_c : Any
+    refrigerant : Any
+
+    Returns
+    -------
+    Any
+    """
     if ṁ_ref <= 0:
         return np.inf
     Q_evap = ṁ_ref * (h_ref_1 - h_ref_4)
@@ -222,6 +365,19 @@ def _compute_min_approach_evap(ṁ_ref, h_ref_4, h_ref_1, p_ref_1, T_c_in, cp_c,
             pass
     return np.nanmin(delta_t)
 def _find_max_mref(compute_min_approach, target_delta, bounds=(1e-3, 100), tol=1e-6):
+    """Function _find_max_mref.
+
+    Arguments
+    ---------
+    compute_min_approach : Any
+    target_delta : Any
+    bounds : Any
+    tol : Any
+
+    Returns
+    -------
+    Any
+    """
     low, high = bounds
     while high - low > tol:
         mid = (low + high) / 2
@@ -232,13 +388,18 @@ def _find_max_mref(compute_min_approach, target_delta, bounds=(1e-3, 100), tol=1
     return low
 # Cycle solver (FULL OPTIMISATION as requested)
 def solve_cycle(cycle_config, general_config, verbose=True):
-    """Full optimisation over PR, T_ref_1 and T_ref_3 with FIXED heating capacity.
-   
-    - Maximises specific COP = (h2-h3) / w_net_per_kg
-    - Equality constraint: Q_out = Q_out_req  (provided in cycle_config)
-    - Pinch points are now *strict* inequality constraints evaluated at the
-      exact ṁ_ref required by the capacity target.
-    """
+"""Full optimisation over PR, T_ref_1 and T_ref_3 with FIXED heating capacity.
+
+Arguments
+---------
+cycle_config : Any
+general_config : Any
+verbose : Any
+
+Returns
+-------
+Any
+"""
     refrigerant = cycle_config["refrigerant"]
     T_c_in = cycle_config["T_c_in"]
     T_h_in = cycle_config["T_h_in"]
@@ -258,6 +419,16 @@ def solve_cycle(cycle_config, general_config, verbose=True):
     if Q_out_req <= 0:
         raise ValueError("Q_out_req must be > 0")
     def objective(x):
+        """Function objective.
+
+        Arguments
+        ---------
+        x : Any
+
+        Returns
+        -------
+        Any
+        """
         PR, T_ref_1, T_ref_3 = x
         if (PR <= 1.0 or
             T_ref_1 > T_c_in - ΔT_pp_min_evap + 1e-3 or
@@ -399,6 +570,18 @@ def solve_cycle(cycle_config, general_config, verbose=True):
     return cycle_data
 # Performance metrics (unchanged)
 def compute_performance(cycle_data, cycle_config, general_config):
+    """Function compute_performance.
+
+    Arguments
+    ---------
+    cycle_data : Any
+    cycle_config : Any
+    general_config : Any
+
+    Returns
+    -------
+    Any
+    """
     s = cycle_data
     ṁ_h = cycle_config["ṁ_h"]
     cp_h = cycle_config["cp_h"]
@@ -433,6 +616,18 @@ def compute_performance(cycle_data, cycle_config, general_config):
     )
 # Diagram data preparation (unchanged – fully compatible)
 def build_ts_data(cycle_data, cycle_config, general_config):
+    """Function build_ts_data.
+
+    Arguments
+    ---------
+    cycle_data : Any
+    cycle_config : Any
+    general_config : Any
+
+    Returns
+    -------
+    Any
+    """
     s = cycle_data
     refrigerant = cycle_config["refrigerant"]
     T_h_in = cycle_config["T_h_in"]
@@ -497,6 +692,17 @@ def build_ts_data(cycle_data, cycle_config, general_config):
         heating={"s": [s["s_ref_1"], s["s_ref_4"]], "T": [T_c_in, s["T_c_out"]]},
     )
 def build_ph_data(cycle_data, cycle_config):
+    """Function build_ph_data.
+
+    Arguments
+    ---------
+    cycle_data : Any
+    cycle_config : Any
+
+    Returns
+    -------
+    Any
+    """
     s = cycle_data
     refrigerant = cycle_config["refrigerant"]
     p1, p2 = s["p_ref_1"], s["p_ref_2"]

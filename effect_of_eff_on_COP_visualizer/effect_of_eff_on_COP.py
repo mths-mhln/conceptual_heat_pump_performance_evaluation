@@ -7,7 +7,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from rich.progress import track
 
 from config import cycle_config, general_config
 from logger import setup_logger
@@ -35,7 +34,6 @@ LOCAL_TS_MARGINS = {
 
 
 def _cycle_bounds_ts_local(cycle_data, cycle_cfg, margins=None):
-	"""Cycle-centered TS bounds using script-local margins only."""
 	m = LOCAL_TS_MARGINS if margins is None else margins
 
 	s_vals = [cycle_data[k] for k in ("s_ref_1", "s_ref_2", "s_ref_3", "s_ref_4")]
@@ -63,7 +61,6 @@ def _cycle_bounds_ts_local(cycle_data, cycle_cfg, margins=None):
 
 
 def _plot_cycle_numbers(ax, cycle_data, point_overrides=None):
-	"""Annotate the four cycle states with orange numbered markers."""
 	point_overrides = {} if point_overrides is None else point_overrides
 	point_specs = [
 		("s_ref_1", "T_ref_1", "1", (10, -9), "top"),
@@ -95,21 +92,18 @@ def _plot_cycle_numbers(ax, cycle_data, point_overrides=None):
 
 
 def _solve_cycle_with_turbine_eff(base_cfg, eta_turb_value):
-	"""Solve a cycle with a modified turbine efficiency and free PR optimization."""
 	cfg = dict(base_cfg)
 	cfg["η_turb"] = float(eta_turb_value)
 	return solve_cycle(cfg, general_config, verbose=False)
 
 
 def _solve_cycle_with_compressor_eff(base_cfg, eta_compr_value):
-	"""Solve a cycle with a modified compressor efficiency and free PR optimization."""
 	cfg = dict(base_cfg)
 	cfg["η_compr"] = float(eta_compr_value)
 	return solve_cycle(cfg, general_config, verbose=False)
 
 
 def _expansion_curve_ts(cycle_data, cycle_cfg, eta_turb, num_points=220):
-	"""Return curved TS expansion path 3->4 using h(p)=h3-eta*(h3-h_is(p))."""
 	refrigerant = cycle_cfg["refrigerant"]
 	p3 = cycle_data["p_ref_3"]
 	p1 = cycle_data["p_ref_1"]
@@ -134,7 +128,6 @@ def _expansion_curve_ts(cycle_data, cycle_cfg, eta_turb, num_points=220):
 
 
 def _compression_curve_ts(cycle_data, cycle_cfg, eta_compr, num_points=220):
-	"""Return curved TS compression path 1->2 using h(p)=h1+(h_is(p)-h1)/eta."""
 	refrigerant = cycle_cfg["refrigerant"]
 	p1 = cycle_data["p_ref_1"]
 	p2 = cycle_data["p_ref_2"]
@@ -161,32 +154,39 @@ def _compression_curve_ts(cycle_data, cycle_cfg, eta_compr, num_points=220):
 	return s_arr[valid], T_arr[valid]
 
 
-def _find_practical_compressor_curve(eta_grid=None, num_points=220):
-	"""Return the first valid low-efficiency compressor curve found by scanning eta values."""
-	if eta_grid is None:
-		eta_grid = np.concatenate([
-			np.array([1e-3]),
-			np.linspace(2e-3, 5e-2, 20),
-			np.linspace(6e-2, 2.5e-1, 20),
-		])
+def _find_practical_compressor_curve(eta_low=0.1, eta_high=0.2, cop_tol=1e3, max_iter=25, num_points=220):
+	if eta_low >= eta_high:
+		raise ValueError("eta_low must be smaller than eta_high")
 
-	first_valid = None
-	first_valid_eta = None
+	best_curve = None
+	best_eta = None
+	prev_valid_cop = None
 
-	for eta_compr in track(eta_grid, description="\033[92mINFO    Scanning low-eff compressor η grid"):
-		logger.info(f"Low-eff compressor scan attempt: η_compr={float(eta_compr):.5f}")
+	for _ in range(max_iter):
+		eta_mid = 0.5 * (eta_low + eta_high)
+		logger.info(f"Low-eff compressor bisection attempt: η_compr={eta_mid:.5f}")
 		try:
-			cycle = _solve_cycle_with_compressor_eff(cycle_config, float(eta_compr))
-			s_comp, T_comp = _compression_curve_ts(cycle, cycle_config, float(eta_compr), num_points=num_points)
-			if len(s_comp) > 1 and first_valid is None:
-				first_valid = (s_comp, T_comp)
-				first_valid_eta = float(eta_compr)
-		except Exception as exc:
-			logger.info(f"Low-eff compressor attempt failed for η_compr={float(eta_compr):.5f}: {exc}")
-			continue
+			cycle = _solve_cycle_with_compressor_eff(cycle_config, eta_mid)
+			s_comp, T_comp = _compression_curve_ts(cycle, cycle_config, eta_mid, num_points=num_points)
+			if len(s_comp) <= 1:
+				raise ValueError("Invalid compressor TS curve")
 
-	if first_valid is not None:
-		return first_valid[0], first_valid[1], first_valid_eta
+			cop_mid = float(cycle.get("COP_turb", np.nan))
+			best_curve = (s_comp, T_comp)
+			best_eta = eta_mid
+
+			if prev_valid_cop is not None and np.isfinite(cop_mid) and np.isfinite(prev_valid_cop):
+				if abs(cop_mid - prev_valid_cop) < cop_tol:
+					return best_curve[0], best_curve[1], best_eta
+
+			prev_valid_cop = cop_mid
+			eta_high = eta_mid
+		except Exception as exc:
+			logger.info(f"Low-eff compressor bisection failed for η_compr={eta_mid:.5f}: {exc}")
+			eta_low = eta_mid
+
+	if best_curve is not None:
+		return best_curve[0], best_curve[1], best_eta
 
 	return None, None, None
 
@@ -196,7 +196,6 @@ def _plot_boundaryline(ax, s_arr, T_arr, color="black", lw=1.8,
 			hatch_side=1.0,        # +1 or -1 to flip hatch direction
 			angle=0.0,             # hatch angle in degrees (0 = perpendicular, 20 = 20 deg from perpendicular)
 			**kwargs):
-	"""Mimic MATLAB boundaryline: line + perpendicular hatch marks with optional angle."""
 	s = np.asarray(s_arr, dtype=float)
 	T = np.asarray(T_arr, dtype=float)
 	valid = np.isfinite(s) & np.isfinite(T)
@@ -265,7 +264,6 @@ def _plot_boundaryline(ax, s_arr, T_arr, color="black", lw=1.8,
 
 
 def _label_curve(ax, x_arr, y_arr, text, color="green", fraction=0.62, fontsize=9, offset=0.0, side=1.0):
-	"""Place a small rotated label along a curve with an optional normal offset."""
 	x = np.asarray(x_arr, dtype=float)
 	y = np.asarray(y_arr, dtype=float)
 	valid = np.isfinite(x) & np.isfinite(y)
@@ -318,16 +316,15 @@ def _label_curve(ax, x_arr, y_arr, text, color="green", fraction=0.62, fontsize=
 		zorder=20,
 	)
 
-def _plot_compressor_efficiency_overlay(output_dir="98_unpolished/custom_cycle_plots"):
-	"""Plot cycle overlays for varying compressor/turbine efficiencies."""
+def _plot_compressor_efficiency_overlay(output_dir):
 	# Calculate practical compressor limit first, then generate intermediate values.
 	s_comp_practical, T_comp_practical, eta_compr_practical = _find_practical_compressor_curve()
 	if eta_compr_practical is not None:
-		# 3 equally spaced values between 0 and the practical limit (skip 0).
-		eta_compr_values = np.linspace(eta_compr_practical, 1, 4)[1:]
+		# Use 3 intermediate values between practical boundary and eta=1, plus eta=1 itself.
+		eta_compr_values = np.linspace(eta_compr_practical, 1, 5)[1:]
 	else:
 		# Fallback if practical limit not found.
-		eta_compr_values = np.linspace(0.3, 1.0, 4)
+		eta_compr_values = np.linspace(0.3, 1.0, 5)
 
 	cycles = []
 	for eta_compr in eta_compr_values:
@@ -712,7 +709,6 @@ def _plot_compressor_efficiency_overlay(output_dir="98_unpolished/custom_cycle_p
 
 
 def plot_single_cycle_custom_ts(output_dir="effect_of_eff_on_COP_visualizer/plots"):
-	"""Generate only the compressor-efficiency TS overlay plot."""
 	_configure_matplotlib()
 
 	_plot_compressor_efficiency_overlay(output_dir=output_dir)

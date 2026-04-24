@@ -457,7 +457,6 @@ def _raw_objective(cycle_config, general_config, decision_variables, verbose, fi
         T_ref_1_var, s_ref_1_var, T_ref_3 = decision_variables
     cycle_data = evaluate_cycle_candidate(
         cycle_config,
-        general_config,
         PR,
         T_ref_1_var,
         s_ref_1_var,
@@ -484,6 +483,7 @@ def _objective_with_trace(x, cycle_config, general_config, verbose, optimization
         Objective value for SciPy minimization.
     """
     score, invalid_cycle, _ = _raw_objective(cycle_config, general_config, x, verbose, fixed_PR=fixed_PR)
+
     if score >= 0.05:  # invalid candidate
         _record_trace_point(optimization_trace, trace_state, score, True)
         return score
@@ -554,7 +554,7 @@ def _candidate_bounds(cycle_config):
         "T_ref_3": (T_h_in + ΔT_pp_min_cond, T_h_in + 50.0),
     }
 
-def evaluate_cycle_candidate(cycle_config, general_config, PR, T_ref_1_var, s_ref_1_var, T_ref_3, verbose=True):
+def evaluate_cycle_candidate(cycle_config, PR, T_ref_1_var, s_ref_1_var, T_ref_3, verbose=True):
     """Evaluate one cycle candidate and reject infeasible states.
 
     Args:
@@ -670,7 +670,7 @@ def evaluate_cycle_candidate(cycle_config, general_config, PR, T_ref_1_var, s_re
         )
     except Exception as e:
         if verbose:
-            logger.exception(f"An error occurred while evaluating the cycle candidate: {e}")
+            logger.info(f"An error occurred while evaluating the cycle candidate: {e}")
         return None
 
 def _optimize_cycle(cycle_config, general_config, fixed_PR=None, verbose=True):
@@ -714,7 +714,7 @@ def _optimize_cycle(cycle_config, general_config, fixed_PR=None, verbose=True):
         if (not np.isfinite(res.fun)) or (res.fun >= 0):
             raise ValueError("No feasible cycle found that satisfies the pinch constraints at the requested Q_out_req.")
         best_PR, best_T_ref_1, best_s_ref_1, best_T_ref_3 = res.x
-        best_cycle_data = evaluate_cycle_candidate(cycle_config, general_config, best_PR, best_T_ref_1, best_s_ref_1, best_T_ref_3, verbose=verbose)
+        best_cycle_data = evaluate_cycle_candidate(cycle_config, best_PR, best_T_ref_1, best_s_ref_1, best_T_ref_3, verbose=verbose)
         if best_cycle_data is None:
             raise ValueError("No feasible cycle found that satisfies the pinch constraints at the requested Q_out_req.")
         best_cycle_data["PR"] = best_PR
@@ -731,7 +731,7 @@ def _optimize_cycle(cycle_config, general_config, fixed_PR=None, verbose=True):
         if (not np.isfinite(res.fun)) or (res.fun >= 0):
             raise ValueError("Specified PR leads to an impossible cycle.")
         best_T_ref_1, best_s_ref_1, best_T_ref_3 = res.x
-        best_cycle_data = evaluate_cycle_candidate(cycle_config, general_config, fixed_PR, best_T_ref_1, best_s_ref_1, best_T_ref_3, verbose=verbose)
+        best_cycle_data = evaluate_cycle_candidate(cycle_config, fixed_PR, best_T_ref_1, best_s_ref_1, best_T_ref_3, verbose=verbose)
         if best_cycle_data is None:
             raise ValueError("Specified PR leads to an impossible cycle.")
         best_cycle_data["PR"] = fixed_PR
