@@ -46,7 +46,7 @@ def main(perform_verification: bool = True) -> float:
     # Branch 1: solve one cycle, print KPIs, and export cycle-specific plots.
     if analysis_type == "single_configuration":
         logger.info("Evaluating conceptual heat pump cycle")
-        cycle_data = solve_cycle(cycle_config, general_config, verbose=True)
+        cycle_data = solve_cycle(cycle_config, general_config, verbose=False)
         perf = compute_performance(cycle_data, cycle_config, general_config)
         table = Table(title=f"Conceptual Heat Pump Cycle - {cycle_config['refrigerant']}", show_lines=False)
         table.add_column("Symbol", style="cyan", no_wrap=True)
@@ -117,6 +117,7 @@ def main(perform_verification: bool = True) -> float:
                 diagram_type="TS",
                 cycle_config=cycle_config_substance,
                 output_dir="substance_thermodynamic_diagrams",
+                show_diagrams=general_config['show_diagrams']
             )
             plot_saving_time += timeit.default_timer() - t_plot
             t_plot = timeit.default_timer()
@@ -124,6 +125,7 @@ def main(perform_verification: bool = True) -> float:
                 diagram_type="PH",
                 cycle_config=cycle_config_substance,
                 output_dir="substance_thermodynamic_diagrams",
+                show_diagrams=general_config['show_diagrams']
             )
             plot_saving_time += timeit.default_timer() - t_plot
         logger.info("Substance thermodynamic diagram generation completed")

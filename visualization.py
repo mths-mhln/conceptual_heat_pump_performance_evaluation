@@ -1148,7 +1148,7 @@ def make_thdy_plot(
     return fig
 
 
-def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_thermodynamic_diagrams", verbose=True):
+def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_thermodynamic_diagrams", show_diagrams=True, verbose=True):
     refrigerant = cycle_config["refrigerant"]
     _configure_matplotlib()
     fig = _make_empty_plot_ts(cycle_config) if diagram_type == "TS" else _make_empty_plot_ph(cycle_config)
@@ -1156,6 +1156,8 @@ def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_therm
     output_path = output_root / refrigerant / f"Thermodynamic Diagram - {refrigerant} - {diagram_type}.pdf"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=1000, bbox_inches="tight")
+    if show_diagrams:
+        plt.show()
     if verbose:
         logger.info(f"Saved: {output_path}")
     return fig

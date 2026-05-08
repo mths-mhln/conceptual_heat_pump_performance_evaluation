@@ -1,20 +1,27 @@
+import os
+import sys
+cwd = os.getcwd()
+sys.path.append(f'{cwd}/')
+
+import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from rich.progress import track
 
 from config import cycle_config, general_config
 from logger import setup_logger
-from thermodynamics import compute_performance, solve_cycle
 
 
 logger = setup_logger()
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_DATA_DIR = SCRIPT_DIR / "data"
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR
 TARGET_REFRIGERANT = "R1234ze(E)"
 COP_KEY = "COP_turb"
-OUTPUT_DIR = Path("COP_investigations")
+OUTPUT_DIR = DEFAULT_OUTPUT_DIR
 
 
 def _load_xyz(npz_path):
@@ -47,173 +54,186 @@ def _save_cop_heatmap(X, Y, Z, out_path, title, cop_key):
     logger.info(f"Saved: {out_path}")
 
 
-def _resolve_existing_files(refrigerant, cop_key, output_dir):
-    root = Path(output_dir) / refrigerant
-    data_root = root / "data"
-    fixed_path = data_root / f"COP_vs_eff_{refrigerant}_{cop_key}_fixedPR.npz"
-    fixed_legacy = root / f"COP_vs_eff_{refrigerant}_{cop_key}_fixedPR.npz"
+def _resolve_data_file(file_name, data_dir):
+    candidate = Path(file_name)
+    if candidate.exists():
+        return candidate
 
-    reopt_candidates = [
-        data_root / f"COP_vs_eff_{refrigerant}_{cop_key}_reoptimized.npz",
-        data_root / f"COP_vs_eff_{refrigerant}_{cop_key}.npz",  # original implementation filename
-        root / f"COP_vs_eff_{refrigerant}_{cop_key}_reoptimized.npz",
-        root / f"COP_vs_eff_{refrigerant}_{cop_key}.npz",  # legacy location
-    ]
-    reopt_path = next((p for p in reopt_candidates if p.exists()), None)
+    data_candidate = Path(data_dir) / file_name
+    if data_candidate.exists():
+        return data_candidate
 
-    missing = []
-    if not fixed_path.exists() and not fixed_legacy.exists():
-        missing.append(str(fixed_path))
-    if reopt_path is None:
-        missing.append("one of: " + ", ".join(str(p) for p in reopt_candidates))
-
-    if fixed_path.exists():
-        fixed_existing = fixed_path
-    else:
-        fixed_existing = fixed_legacy
-
-    return fixed_existing, reopt_path, missing
-
-
-def _compute_fixed_pr_file(refrigerant, cop_key, output_dir):
-    """Compute and save the fixed-PR efficiency sweep for a refrigerant."""
-    cfg_base = dict(cycle_config)
-    cfg_base["refrigerant"] = refrigerant
-    gen_cfg = dict(general_config)
-
-    # One optimization call to get the reference PR.
-    reference_cycle = solve_cycle(dict(cfg_base), gen_cfg, verbose=False)
-    reference_pr = float(reference_cycle["PR"])
-
-    (X, Y), n = _build_efficiency_grid(gen_cfg)
-    Z = np.full_like(X, np.nan, dtype=float)
-    total_runs = n * n
-
-    logger.info(f"Computing fixed-PR sweep for {refrigerant} at PR={reference_pr:.6f}")
-    for k in track(range(total_runs), description="\033[92mINFO    "):
-        i, j = divmod(k, n)
-        cfg = dict(cfg_base)
-        cfg["PR"] = reference_pr
-        cfg["η_turb"] = float(X[i, j])
-        cfg["η_compr"] = float(Y[i, j])
-        try:
-            cycle_data = solve_cycle(cfg, gen_cfg, verbose=False)
-            perf = compute_performance(cycle_data, cfg, gen_cfg)
-            Z[i, j] = perf[cop_key]
-        except Exception:
-            Z[i, j] = np.nan
-
-    root = Path(output_dir) / refrigerant / "data"
-    root.mkdir(parents=True, exist_ok=True)
-    fixed_path = root / f"COP_vs_eff_{refrigerant}_{cop_key}_fixedPR.npz"
-    np.savez_compressed(fixed_path, X=X, Y=Y, Z=Z, PR=reference_pr)
-    logger.info(f"Saved computed fixed-PR data: {fixed_path}")
-
-    fig_path = root / f"{cop_key}_vs_Efficiencies_{refrigerant}_fixedPR.pdf"
-    _save_cop_heatmap(
-        X,
-        Y,
-        Z,
-        fig_path,
-        title=rf"{cop_key} at fixed PR={reference_pr:.4f} ({refrigerant})",
-        cop_key=cop_key,
+    raise FileNotFoundError(
+        f"Data file not found: {file_name}. Checked {candidate} and {data_candidate}."
     )
 
-    return fixed_path
+
+def _display_label(file_path):
+    return file_path.stem.replace("_", " ")
 
 
-def _compute_reoptimized_file(refrigerant, cop_key, output_dir):
-    """Compute and save original implementation sweep (PR optimized at every point)."""
-    cfg_base = dict(cycle_config)
-    cfg_base["refrigerant"] = refrigerant
-    gen_cfg = dict(general_config)
-
-    (X, Y), n = _build_efficiency_grid(gen_cfg)
-    Z = np.full_like(X, np.nan, dtype=float)
-    total_runs = n * n
-
-    logger.info(f"Computing re-optimized sweep for {refrigerant}")
-    for k in track(range(total_runs), description="\033[92mINFO    "):
-        i, j = divmod(k, n)
-        cfg = dict(cfg_base)
-        cfg.pop("PR", None)
-        cfg["η_turb"] = float(X[i, j])
-        cfg["η_compr"] = float(Y[i, j])
-        try:
-            cycle_data = solve_cycle(cfg, gen_cfg, verbose=False)
-            perf = compute_performance(cycle_data, cfg, gen_cfg)
-            Z[i, j] = perf[cop_key]
-        except Exception:
-            Z[i, j] = np.nan
-
-    root = Path(output_dir) / refrigerant / "data"
-    root.mkdir(parents=True, exist_ok=True)
-    reopt_path = root / f"COP_vs_eff_{refrigerant}_{cop_key}_reoptimized.npz"
-    np.savez_compressed(reopt_path, X=X, Y=Y, Z=Z)
-    logger.info(f"Saved computed re-optimized data: {reopt_path}")
-
-    fig_path = root / f"{cop_key}_vs_Efficiencies_{refrigerant}_reoptimized.pdf"
-    _save_cop_heatmap(
-        X,
-        Y,
-        Z,
-        fig_path,
-        title=rf"{cop_key} with PR optimization per point ({refrigerant})",
-        cop_key=cop_key,
-    )
-
-    return reopt_path
+def _discover_npz_files(data_dir):
+    """Discover exactly two NPZ files in the data directory."""
+    data_dir = Path(data_dir)
+    if not data_dir.exists():
+        raise FileNotFoundError(f"Data directory not found: {data_dir}")
+    
+    npz_files = sorted(data_dir.glob("*.npz"))
+    
+    if len(npz_files) < 2:
+        raise FileNotFoundError(
+            f"Expected at least 2 NPZ files in {data_dir}, but found {len(npz_files)}."
+        )
+    
+    if len(npz_files) > 2:
+        logger.warning(
+            f"Found {len(npz_files)} NPZ files in {data_dir}. Using the first two: "
+            f"{npz_files[0].name} and {npz_files[1].name}"
+        )
+    
+    return npz_files[0], npz_files[1]
 
 
-def _prompt_compute_missing(missing_items):
-    logger.warning("Missing required files for extraction-only deviation study:")
-    for item in missing_items:
-        logger.warning(f"  - {item}")
-    answer = input("Missing data files detected. Compute them now? [y/N]: ").strip().lower()
-    return answer in {"y", "yes"}
+# def _compute_fixed_pr_file(refrigerant, cop_key, output_dir):
+#     """Compute and save the fixed-PR efficiency sweep for a refrigerant."""
+#     cfg_base = dict(cycle_config)
+#     cfg_base["refrigerant"] = refrigerant
+#     gen_cfg = dict(general_config)
+
+#     # One optimization call to get the reference PR.
+#     reference_cycle = solve_cycle(dict(cfg_base), gen_cfg, verbose=False)
+#     reference_pr = float(reference_cycle["PR"])
+
+#     (X, Y), n = _build_efficiency_grid(gen_cfg)
+#     Z = np.full_like(X, np.nan, dtype=float)
+#     total_runs = n * n
+
+#     logger.info(f"Computing fixed-PR sweep for {refrigerant} at PR={reference_pr:.6f}")
+#     for k in track(range(total_runs), description="\033[92mINFO    "):
+#         i, j = divmod(k, n)
+#         cfg = dict(cfg_base)
+#         cfg["PR"] = reference_pr
+#         cfg["η_turb"] = float(X[i, j])
+#         cfg["η_compr"] = float(Y[i, j])
+#         try:
+#             cycle_data = solve_cycle(cfg, gen_cfg, verbose=False)
+#             perf = compute_performance(cycle_data, cfg, gen_cfg)
+#             Z[i, j] = perf[cop_key]
+#         except Exception:
+#             Z[i, j] = np.nan
+
+#     root = Path(output_dir) / refrigerant / "data"
+#     root.mkdir(parents=True, exist_ok=True)
+#     fixed_path = root / f"COP_vs_eff_{refrigerant}_{cop_key}_fixedPR.npz"
+#     np.savez_compressed(fixed_path, X=X, Y=Y, Z=Z, PR=reference_pr)
+#     logger.info(f"Saved computed fixed-PR data: {fixed_path}")
+
+#     fig_path = root / f"{cop_key}_vs_Efficiencies_{refrigerant}_fixedPR.pdf"
+#     _save_cop_heatmap(
+#         X,
+#         Y,
+#         Z,
+#         fig_path,
+#         title=rf"{cop_key} at fixed PR={reference_pr:.4f} ({refrigerant})",
+#         cop_key=cop_key,
+#     )
+
+#     return fixed_path
+
+
+# def _compute_reoptimized_file(refrigerant, cop_key, output_dir):
+#     """Compute and save original implementation sweep (PR optimized at every point)."""
+#     cfg_base = dict(cycle_config)
+#     cfg_base["refrigerant"] = refrigerant
+#     gen_cfg = dict(general_config)
+
+#     (X, Y), n = _build_efficiency_grid(gen_cfg)
+#     Z = np.full_like(X, np.nan, dtype=float)
+#     total_runs = n * n
+
+#     logger.info(f"Computing re-optimized sweep for {refrigerant}")
+#     for k in track(range(total_runs), description="\033[92mINFO    "):
+#         i, j = divmod(k, n)
+#         cfg = dict(cfg_base)
+#         cfg.pop("PR", None)
+#         cfg["η_turb"] = float(X[i, j])
+#         cfg["η_compr"] = float(Y[i, j])
+#         try:
+#             cycle_data = solve_cycle(cfg, gen_cfg, verbose=False)
+#             perf = compute_performance(cycle_data, cfg, gen_cfg)
+#             Z[i, j] = perf[cop_key]
+#         except Exception:
+#             Z[i, j] = np.nan
+
+#     root = Path(output_dir) / refrigerant / "data"
+#     root.mkdir(parents=True, exist_ok=True)
+#     reopt_path = root / f"COP_vs_eff_{refrigerant}_{cop_key}_reoptimized.npz"
+#     np.savez_compressed(reopt_path, X=X, Y=Y, Z=Z)
+#     logger.info(f"Saved computed re-optimized data: {reopt_path}")
+
+#     fig_path = root / f"{cop_key}_vs_Efficiencies_{refrigerant}_reoptimized.pdf"
+#     _save_cop_heatmap(
+#         X,
+#         Y,
+#         Z,
+#         fig_path,
+#         title=rf"{cop_key} with PR optimization per point ({refrigerant})",
+#         cop_key=cop_key,
+#     )
+
+#     return reopt_path
 
 
 def run_deviation_study_from_existing(
-    refrigerant=TARGET_REFRIGERANT,
-    cop_key=COP_KEY,
+    data1_file=None,
+    data2_file=None,
+    data_dir=DEFAULT_DATA_DIR,
     output_dir=OUTPUT_DIR,
 ):
-    """Compare fixed-PR and re-optimized COP sweeps using existing data, with optional user-confirmed fallback compute."""
-    fixed_path, reopt_path, missing = _resolve_existing_files(refrigerant, cop_key, output_dir)
+    """Compare two NPZ sweeps from a local data folder and save the deviation plots next to this script.
+    
+    Args:
+        data1_file: File name of the first NPZ file. If None, auto-discovered from data_dir.
+        data2_file: File name of the second NPZ file. If None, auto-discovered from data_dir.
+        data_dir: Directory containing the NPZ files.
+        output_dir: Directory where the deviation plots will be saved.
+    """
+    data_dir = Path(data_dir)
+    output_dir = Path(output_dir)
+    
+    if data1_file is None or data2_file is None:
+        discovered_1, discovered_2 = _discover_npz_files(data_dir)
+        data1_file = data1_file or discovered_1.name
+        data2_file = data2_file or discovered_2.name
+        logger.info(f"Auto-discovered data files: {data1_file}, {data2_file}")
 
-    if missing:
-        if _prompt_compute_missing(missing):
-            if not Path(fixed_path).exists():
-                fixed_path = _compute_fixed_pr_file(refrigerant, cop_key, output_dir)
-            if reopt_path is None:
-                reopt_path = _compute_reoptimized_file(refrigerant, cop_key, output_dir)
-        else:
-            raise FileNotFoundError("Required files missing and computation was not approved by user.")
+    data1_path = _resolve_data_file(data1_file, data_dir)
+    data2_path = _resolve_data_file(data2_file, data_dir)
 
-    logger.info(f"Loading fixed-PR data: {fixed_path}")
-    logger.info(f"Loading re-optimized data: {reopt_path}")
+    logger.info(f"Loading data1: {data1_path}")
+    logger.info(f"Loading data2: {data2_path}")
 
-    Xf, Yf, Z_fixed, pr_fixed = _load_xyz(fixed_path)
-    Xr, Yr, Z_reopt, _ = _load_xyz(reopt_path)
+    Xf, Yf, Z_data1, pr_data1 = _load_xyz(data1_path)
+    Xr, Yr, Z_data2, _ = _load_xyz(data2_path)
 
-    if Xf.shape != Xr.shape or Yf.shape != Yr.shape or Z_fixed.shape != Z_reopt.shape:
+    if Xf.shape != Xr.shape or Yf.shape != Yr.shape or Z_data1.shape != Z_data2.shape:
         raise ValueError(
             "Existing files have incompatible shapes: "
-            f"fixed={Z_fixed.shape}, reoptimized={Z_reopt.shape}"
+            f"data1={Z_data1.shape}, data2={Z_data2.shape}"
         )
 
     if not (np.allclose(Xf, Xr, equal_nan=True) and np.allclose(Yf, Yr, equal_nan=True)):
         raise ValueError("Efficiency grids in existing files do not match; cannot compute point-wise deviation.")
 
     X, Y = Xf, Yf
-    valid = np.isfinite(Z_fixed) & np.isfinite(Z_reopt)
+    valid = np.isfinite(Z_data1) & np.isfinite(Z_data2)
 
-    delta = np.full_like(Z_fixed, np.nan, dtype=float)
-    rel_pct = np.full_like(Z_fixed, np.nan, dtype=float)
-    delta[valid] = Z_fixed[valid] - Z_reopt[valid]
+    delta = np.full_like(Z_data1, np.nan, dtype=float)
+    rel_pct = np.full_like(Z_data1, np.nan, dtype=float)
+    delta[valid] = Z_data1[valid] - Z_data2[valid]
 
-    denom_ok = valid & (np.abs(Z_reopt) > 1e-12)
-    rel_pct[denom_ok] = 100.0 * delta[denom_ok] / np.abs(Z_reopt[denom_ok])
+    denom_ok = valid & (np.abs(Z_data2) > 1e-12)
+    rel_pct[denom_ok] = 100.0 * delta[denom_ok] / np.abs(Z_data2[denom_ok])
 
     abs_delta = np.abs(delta)
     abs_rel_pct = np.abs(rel_pct)
@@ -233,21 +253,25 @@ def run_deviation_study_from_existing(
         eta_turb_at_max_abs = np.nan
         eta_compr_at_max_abs = np.nan
 
-    out_root = Path(output_dir) / refrigerant
+    out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    dev_data_path = out_root / f"COP_vs_eff_{refrigerant}_{cop_key}_deviation_fixedPR_vs_reoptimized.npz"
+    data1_label = _display_label(data1_path)
+    data2_label = _display_label(data2_path)
+    comparison_slug = f"{data1_path.stem}_vs_{data2_path.stem}".replace("/", "-")
+
+    dev_data_path = out_root / f"{comparison_slug}_deviation.npz"
     np.savez_compressed(
         dev_data_path,
         X=X,
         Y=Y,
-        Z_fixed=Z_fixed,
-        Z_reoptimized=Z_reopt,
+        Z_data1=Z_data1,
+        Z_data2=Z_data2,
         delta=delta,
         rel_pct=rel_pct,
-        PR_fixed=pr_fixed,
-        fixed_source=str(fixed_path),
-        reoptimized_source=str(reopt_path),
+        PR_data1=pr_data1,
+        data1_source=str(data1_path),
+        data2_source=str(data2_path),
         mean_abs_delta=mean_abs_delta,
         max_abs_delta=max_abs_delta,
         rmse_delta=rmse_delta,
@@ -261,20 +285,20 @@ def run_deviation_study_from_existing(
     fig, axes = plt.subplots(1, 2, figsize=(14, 6.2))
 
     c0 = axes[0].contourf(X, Y, delta, levels=30, cmap="coolwarm", extend="both")
-    plt.colorbar(c0, ax=axes[0], label=rf"$\Delta$ {cop_key} (fixed PR - re-optimized)")
+    plt.colorbar(c0, ax=axes[0], label=rf"$\Delta$ {COP_KEY} (data1 - data2)")
     axes[0].set_xlabel(r"$\eta_{\mathrm{turb}}$")
     axes[0].set_ylabel(r"$\eta_{\mathrm{compr}}$")
-    axes[0].set_title("Absolute Deviation")
+    axes[0].set_title(f"Absolute Deviation\n{data1_label} - {data2_label}")
 
     c1 = axes[1].contourf(X, Y, abs_rel_pct, levels=30, cmap="magma", extend="max")
     plt.colorbar(c1, ax=axes[1], label=r"Absolute relative deviation [%]")
     axes[1].set_xlabel(r"$\eta_{\mathrm{turb}}$")
     axes[1].set_ylabel(r"$\eta_{\mathrm{compr}}$")
-    axes[1].set_title("Relative Deviation")
+    axes[1].set_title(f"Relative Deviation\n{data1_label} - {data2_label}")
 
     fig.suptitle(
-        rf"Deviation study ({refrigerant})"
-        + (rf" | fixed PR={pr_fixed:.5f}" if np.isfinite(pr_fixed) else " | fixed PR=n/a")
+        rf"Deviation study"
+        + (rf" | data1 PR={pr_data1:.5f}" if np.isfinite(pr_data1) else " | data1 PR=n/a")
         + "\n"
         + rf"mean|Δ|={mean_abs_delta:.4f}, max|Δ|={max_abs_delta:.4f}, RMSE={rmse_delta:.4f}, "
         + rf"mean|rel|={mean_abs_rel_pct:.2f}%, max|rel|={max_abs_rel_pct:.2f}%",
@@ -282,14 +306,41 @@ def run_deviation_study_from_existing(
     )
     fig.tight_layout(rect=[0, 0, 1, 0.90])
 
-    dev_fig_path = out_root / f"{cop_key}_deviation_fixedPR_vs_reoptimized_{refrigerant}.pdf"
+    dev_fig_path = out_root / f"{comparison_slug}_deviation.pdf"
     fig.savefig(dev_fig_path, dpi=600, bbox_inches="tight")
     plt.close(fig)
     logger.info(f"Saved deviation figure: {dev_fig_path}")
 
+    # Also save each dataset's contour separately next to the comparison figure
+    data1_contour_pdf = out_root / f"{data1_path.stem}_contour.pdf"
+    data1_contour_png = out_root / f"{data1_path.stem}_contour.png"
+    _save_cop_heatmap(X, Y, Z_data1, data1_contour_pdf, title=f"{data1_label}", cop_key=COP_KEY)
+    _save_cop_heatmap(X, Y, Z_data1, data1_contour_png, title=f"{data1_label}", cop_key=COP_KEY)
+
+    data2_contour_pdf = out_root / f"{data2_path.stem}_contour.pdf"
+    data2_contour_png = out_root / f"{data2_path.stem}_contour.png"
+    _save_cop_heatmap(X, Y, Z_data2, data2_contour_pdf, title=f"{data2_label}", cop_key=COP_KEY)
+    _save_cop_heatmap(X, Y, Z_data2, data2_contour_png, title=f"{data2_label}", cop_key=COP_KEY)
+
+    logger.info(f"Saved individual contour plots: {data1_contour_pdf}, {data2_contour_pdf}")
+
+    # Save absolute and relative deviation plots separately
+    abs_dev_pdf = out_root / f"{comparison_slug}_absolute_deviation.pdf"
+    abs_dev_png = out_root / f"{comparison_slug}_absolute_deviation.png"
+    _save_cop_heatmap(X, Y, delta, abs_dev_pdf, title=f"Absolute Deviation\n{data1_label} - {data2_label}", cop_key=rf"$\Delta$ {COP_KEY}")
+    _save_cop_heatmap(X, Y, delta, abs_dev_png, title=f"Absolute Deviation\n{data1_label} - {data2_label}", cop_key=rf"$\Delta$ {COP_KEY}")
+
+    rel_dev_pdf = out_root / f"{comparison_slug}_relative_deviation.pdf"
+    rel_dev_png = out_root / f"{comparison_slug}_relative_deviation.png"
+    _save_cop_heatmap(X, Y, abs_rel_pct, rel_dev_pdf, title=f"Relative Deviation\n{data1_label} - {data2_label}", cop_key="Absolute relative deviation [%]")
+    _save_cop_heatmap(X, Y, abs_rel_pct, rel_dev_png, title=f"Relative Deviation\n{data1_label} - {data2_label}", cop_key="Absolute relative deviation [%]")
+
+    logger.info(f"Saved separate deviation plots: {abs_dev_pdf}, {rel_dev_pdf}")
+
     summary = {
-        "refrigerant": refrigerant,
-        "fixed_PR": pr_fixed,
+        "data1_file": str(data1_path),
+        "data2_file": str(data2_path),
+        "data1_PR": pr_data1,
         "valid_points": int(np.sum(valid)),
         "mean_abs_delta": mean_abs_delta,
         "max_abs_delta": max_abs_delta,
@@ -300,6 +351,10 @@ def run_deviation_study_from_existing(
         "eta_compr_at_max_abs": eta_compr_at_max_abs,
         "deviation_data_file": str(dev_data_path),
         "deviation_figure_file": str(dev_fig_path),
+        "absolute_deviation_file": str(abs_dev_pdf),
+        "absolute_deviation_png": str(abs_dev_png),
+        "relative_deviation_file": str(rel_dev_pdf),
+        "relative_deviation_png": str(rel_dev_png),
     }
 
     logger.info(
@@ -310,9 +365,42 @@ def run_deviation_study_from_existing(
     return summary
 
 
+def _build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description="Compare two saved COP sweep files from a local data folder and save the deviation plots next to this script."
+    )
+    parser.add_argument(
+        "--data1-file",
+        default=None,
+        help="File name of the first NPZ file (optional; auto-discovered if not provided).",
+    )
+    parser.add_argument(
+        "--data2-file",
+        default=None,
+        help="File name of the second NPZ file (optional; auto-discovered if not provided).",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=str(DEFAULT_DATA_DIR),
+        help="Directory containing the NPZ files to compare.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=str(DEFAULT_OUTPUT_DIR),
+        help="Directory where the deviation plots and summary file will be saved.",
+    )
+    return parser
+
+
 if __name__ == "__main__":
-    result = run_deviation_study_from_existing(refrigerant=TARGET_REFRIGERANT)
+    args = _build_arg_parser().parse_args()
+    result = run_deviation_study_from_existing(
+        data1_file=args.data1_file,
+        data2_file=args.data2_file,
+        data_dir=args.data_dir,
+        output_dir=args.output_dir,
+    )
     logger.info(
-        f"Done: refrigerant={result['refrigerant']}, valid_points={result['valid_points']}, "
+        f"Done: valid_points={result['valid_points']}, "
         f"mean|Δ|={result['mean_abs_delta']:.5f}"
     )
