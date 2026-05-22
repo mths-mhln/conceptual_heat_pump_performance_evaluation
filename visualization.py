@@ -1,10 +1,13 @@
 import warnings
+import timeit
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.lines import Line2D
 from matplotlib import patheffects
-from CoolProp.CoolProp import PropsSI
+from CoolProp.CoolProp import PropsSI, AbstractState
+import CoolProp.CoolProp as CP
+from scipy.optimize import brentq
 from logger import setup_logger
 from pathlib import Path
 
@@ -13,6 +16,153 @@ from thermodynamics import _isobar_segment   # TS critical-isobar
 
 logger = setup_logger()
 
+
+
+# Spinodal computation
+# ====================
+def _dpdrho_T(AS, rho, T):
+    """Return dP/dρ|T at a given (ρ, T) using CoolProp's derivative interface."""
+    try:
+        AS.update(CP.DmassT_INPUTS, rho, T)
+        return AS.first_partial_deriv(CP.iP, CP.iDmass, CP.iT)
+    except Exception:
+        return np.nan
+
+
+def _find_spinodal_manual(refrigerant, T_min_override=None, T_max_override=None, n_T=100):
+    """For each isotherm, find the two densities where dP/dρ|T = 0.
+    If T_min_override/T_max_override are provided, use those; otherwise use defaults.
+    Returns separate arrays for liquid and vapour spinodal branches in (T, rho, P) space."""
+    try:
+        AS = AbstractState("REFPROP", refrigerant)
+        T_c = AS.T_critical()
+        rho_c = AS.rhomass_critical()
+        T_min_default = max(AS.Tmin() + 1.0, 200.0)
+        T_max_default = T_c - 0.5
+        
+        # Use provided bounds or defaults
+        T_min = T_min_override if T_min_override is not None else T_min_default
+        T_max = T_max_override if T_max_override is not None else T_max_default
+        
+        # Clamp T_max to below critical point
+        T_max = min(T_max, T_c - 0.5)
+        # Ensure T_min is valid
+        T_min = max(T_min, T_min_default)
+        
+        if T_max <= T_min:
+            return None, None, None, None, None, None
+
+        T_vals = np.linspace(T_min, T_max, n_T)
+        liq_T, liq_rho, liq_P = [], [], []
+        vap_T, vap_rho, vap_P = [], [], []
+
+        for T in T_vals:
+            try:
+                # Get saturation densities as bracket bounds
+                AS.update(CP.QT_INPUTS, 0.0, T)
+                rho_liq_sat = AS.rhomass()
+                AS.update(CP.QT_INPUTS, 1.0, T)
+                rho_vap_sat = AS.rhomass()
+
+                # Liquid spinodal: dP/dρ|T = 0 between rho_c and rho_liq_sat
+                rho_lo, rho_hi = rho_c * 1.01, rho_liq_sat * 0.999
+                dpdrho_lo = _dpdrho_T(AS, rho_lo, T)
+                dpdrho_hi = _dpdrho_T(AS, rho_hi, T)
+                if np.isfinite(dpdrho_lo) and np.isfinite(dpdrho_hi) and dpdrho_lo * dpdrho_hi < 0:
+                    rho_sp = brentq(lambda r: _dpdrho_T(AS, r, T), rho_lo, rho_hi, xtol=1e-6)
+                    AS.update(CP.DmassT_INPUTS, rho_sp, T)
+                    liq_T.append(T)
+                    liq_rho.append(rho_sp)
+                    liq_P.append(AS.p())
+
+                # Vapour spinodal: dP/dρ|T = 0 between rho_vap_sat and rho_c
+                rho_lo, rho_hi = rho_vap_sat * 1.001, rho_c * 0.99
+                dpdrho_lo = _dpdrho_T(AS, rho_lo, T)
+                dpdrho_hi = _dpdrho_T(AS, rho_hi, T)
+                if np.isfinite(dpdrho_lo) and np.isfinite(dpdrho_hi) and dpdrho_lo * dpdrho_hi < 0:
+                    rho_sp = brentq(lambda r: _dpdrho_T(AS, r, T), rho_lo, rho_hi, xtol=1e-6)
+                    AS.update(CP.DmassT_INPUTS, rho_sp, T)
+                    vap_T.append(T)
+                    vap_rho.append(rho_sp)
+                    vap_P.append(AS.p())
+            except Exception:
+                continue
+
+        return (np.array(liq_T), np.array(liq_rho), np.array(liq_P),
+                np.array(vap_T), np.array(vap_rho), np.array(vap_P))
+    except Exception:
+        return None, None, None, None, None, None
+
+
+def _get_spinodal_ts(refrigerant, T_lo=None, T_hi=None):
+    """Compute spinodal curve and convert to (s, T) coordinates for TS diagram.
+    If T_lo/T_hi provided, compute spinodal across that range."""
+    liq_T, liq_rho, liq_P, vap_T, vap_rho, vap_P = _find_spinodal_manual(
+        refrigerant, T_min_override=T_lo, T_max_override=T_hi, n_T=120
+    )
+    if liq_T is None or len(liq_T) == 0:
+        return None, None, None, None
+
+    try:
+        AS = AbstractState("REFPROP", refrigerant)
+        liq_s = []
+        for rho, T in zip(liq_rho, liq_T):
+            AS.update(CP.DmassT_INPUTS, rho, T)
+            liq_s.append(AS.smass())
+
+        vap_s = []
+        for rho, T in zip(vap_rho, vap_T):
+            AS.update(CP.DmassT_INPUTS, rho, T)
+            vap_s.append(AS.smass())
+
+        return np.array(liq_s), np.array(liq_T), np.array(vap_s), np.array(vap_T)
+    except Exception:
+        return None, None, None, None
+
+
+def _get_spinodal_ph(refrigerant, p_lo=None, p_hi=None):
+    """Compute spinodal curve and convert to (h, p) coordinates for PH diagram.
+    If p_lo/p_hi provided, convert pressure range to temperature range for spinodal computation."""
+    try:
+        AS = AbstractState("REFPROP", refrigerant)
+        T_c = AS.T_critical()
+        
+        # Convert pressure bounds to approximate temperature bounds
+        T_min = None
+        T_max = None
+        if p_lo is not None:
+            try:
+                # At saturation, get T from pressure
+                AS.update(CP.PQ_INPUTS, p_lo, 0.0)
+                T_min = AS.T()
+            except Exception:
+                T_min = None
+        if p_hi is not None:
+            try:
+                AS.update(CP.PQ_INPUTS, p_hi, 1.0)
+                T_max = AS.T()
+            except Exception:
+                T_max = None
+        
+        liq_T, liq_rho, liq_P, vap_T, vap_rho, vap_P = _find_spinodal_manual(
+            refrigerant, T_min_override=T_min, T_max_override=T_max, n_T=120
+        )
+        if liq_T is None or len(liq_T) == 0:
+            return None, None, None, None
+
+        liq_h = []
+        for rho, T in zip(liq_rho, liq_T):
+            AS.update(CP.DmassT_INPUTS, rho, T)
+            liq_h.append(AS.hmass())
+
+        vap_h = []
+        for rho, T in zip(vap_rho, vap_T):
+            AS.update(CP.DmassT_INPUTS, rho, T)
+            vap_h.append(AS.hmass())
+
+        return np.array(liq_h), np.array(liq_P), np.array(vap_h), np.array(vap_P)
+    except Exception:
+        return None, None, None, None
 
 
 # Utility
@@ -43,6 +193,7 @@ def _q(out, *args, cycle_config):
 
     refrigerant = cycle_config["refrigerant"]
     try:
+        property = PropsSI(out, *args, f"REFPROP::{refrigerant}")
         return PropsSI(out, *args, f"REFPROP::{refrigerant}")
     except Exception:
         return np.nan
@@ -977,7 +1128,7 @@ def _make_plot_ph(cycle_data, perf, ph_data, cycle_config, verification_data=Non
     return fig
 
 
-def _make_empty_plot_ts(cycle_config):
+def _make_empty_plot_ts(cycle_config, show_spinodal=False):
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
     resolution = general_config.get("resolution", "low")
@@ -1010,6 +1161,8 @@ def _make_empty_plot_ts(cycle_config):
     ax.set_xlim(s_lo, s_hi)
     ax.set_ylim(T_lo, T_hi)
     ax.plot(s_dome, T_dome, color='black', lw=1.0, zorder=3)
+    ax.scatter(1203.6835821063594 ,312.2138484973677, s = 0.1)
+    ax.scatter(1203.6515242080186 ,312.504148610755, s = 0.1)
 
     _draw_isolines_labeled(
         ax, _quality_isolines_ts(T_lo, T_hi, cycle_config, n_pts=n_pts),
@@ -1041,13 +1194,26 @@ def _make_empty_plot_ts(cycle_config):
         ax.plot(s_crit, T_crit, marker='o', markerfacecolor='yellow',
                 markersize=5, markeredgecolor='black', zorder=9)
 
+    # Optional: true spinodal lines computed via dP/drho|T = 0
+    if show_spinodal:
+        try:
+            liq_s, liq_T, vap_s, vap_T = _get_spinodal_ts(refrigerant, T_lo=T_lo, T_hi=T_hi)
+            if liq_s is not None and len(liq_s) > 2:
+                ax.plot(liq_s, liq_T, color='#8B0000', ls='--', lw=1.2, zorder=2,
+                        label='Spinodal (liquid)')
+            if vap_s is not None and len(vap_s) > 2:
+                ax.plot(vap_s, vap_T, color='#DC143C', ls='--', lw=1.2, zorder=2,
+                        label='Spinodal (vapour)')
+        except Exception:
+            pass
+
     ax.set_xlabel(r"$s\ [\mathrm{J/kg/K}]$")
     ax.set_ylabel(r"$T\ [\mathrm{K}]$")
     fig.tight_layout()
     return fig
 
 
-def _make_empty_plot_ph(cycle_config):
+def _make_empty_plot_ph(cycle_config, show_spinodal=False):
     warnings.filterwarnings("ignore")
     refrigerant = cycle_config["refrigerant"]
     resolution = general_config.get("resolution", "low")
@@ -1113,6 +1279,19 @@ def _make_empty_plot_ph(cycle_config):
     if v.any():
         ax.plot(h_Tc[v], p_iso[v], color='black', ls=':', lw=1.0, zorder=1)
 
+    # Optional: true spinodal lines computed via dP/drho|T = 0
+    if show_spinodal:
+        try:
+            liq_h, liq_p, vap_h, vap_p = _get_spinodal_ph(refrigerant, p_lo=p_lo, p_hi=p_hi)
+            if liq_h is not None and len(liq_h) > 2:
+                ax.plot(liq_h, liq_p, color='#8B0000', ls='--', lw=1.2, zorder=2,
+                        label='Spinodal (liquid)')
+            if vap_h is not None and len(vap_h) > 2:
+                ax.plot(vap_h, vap_p, color='#DC143C', ls='--', lw=1.2, zorder=2,
+                        label='Spinodal (vapour)')
+        except Exception:
+            pass
+
     ax.set_xlabel(r"$h\ [\mathrm{kJ/kg}]$")
     ax.set_ylabel(r"$p\ [\mathrm{Pa}]$")
     ax.xaxis.set_major_formatter(
@@ -1148,10 +1327,13 @@ def make_thdy_plot(
     return fig
 
 
-def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_thermodynamic_diagrams", show_diagrams=True, verbose=True):
+def make_empty_thdy_plot(diagram_type, cycle_config, output_dir="substance_thermodynamic_diagrams", show_diagrams=True, show_spinodal=None, verbose=True):
     refrigerant = cycle_config["refrigerant"]
     _configure_matplotlib()
-    fig = _make_empty_plot_ts(cycle_config) if diagram_type == "TS" else _make_empty_plot_ph(cycle_config)
+    if show_spinodal is None:
+        show_spinodal = general_config.get("show_spinodal", False)
+    fig = (_make_empty_plot_ts(cycle_config, show_spinodal=show_spinodal) if diagram_type == "TS" 
+           else _make_empty_plot_ph(cycle_config, show_spinodal=show_spinodal))
     output_root = Path(output_dir)
     output_path = output_root / refrigerant / f"Thermodynamic Diagram - {refrigerant} - {diagram_type}.pdf"
     output_path.parent.mkdir(parents=True, exist_ok=True)

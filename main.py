@@ -117,7 +117,8 @@ def main(perform_verification: bool = True) -> float:
                 diagram_type="TS",
                 cycle_config=cycle_config_substance,
                 output_dir="substance_thermodynamic_diagrams",
-                show_diagrams=general_config['show_diagrams']
+                show_diagrams=general_config['show_diagrams'], 
+                show_spinodal=general_config["show_spinodal"]
             )
             plot_saving_time += timeit.default_timer() - t_plot
             t_plot = timeit.default_timer()
@@ -125,7 +126,8 @@ def main(perform_verification: bool = True) -> float:
                 diagram_type="PH",
                 cycle_config=cycle_config_substance,
                 output_dir="substance_thermodynamic_diagrams",
-                show_diagrams=general_config['show_diagrams']
+                show_diagrams=general_config['show_diagrams'],
+                show_spinodal=general_config["show_spinodal"]
             )
             plot_saving_time += timeit.default_timer() - t_plot
         logger.info("Substance thermodynamic diagram generation completed")

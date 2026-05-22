@@ -15,6 +15,7 @@ refrigerant = "R1234ze(E)"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "C
 # Substances to plot in "substance_thermodynamic_diagrams" analysis type
 substances_to_plot = ["R1234ze(E)"]
 show_diagrams = True
+show_spinodal = False 
 
 
 
@@ -131,6 +132,7 @@ elif analysis_type == "substance_thermodynamic_diagrams":
         "ph_margin_p_top": 0.2,
         "substances_to_plot": substances_to_plot,
         "show_diagrams": show_diagrams,
+        "show_spinodal": show_spinodal,
     }
 else:
     raise ValueError(
