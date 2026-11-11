@@ -104,8 +104,6 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                     verification_data=MTW_cycle_state_params[cycle_config["refrigerant"]],
                     verbose=True,
                 )
-                
-            logger.info("Rendering P-H diagram")
             make_thdy_plot(
                 state,
                 perf,
@@ -123,7 +121,7 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
             "Maximum discrepancy",
             "-",
             "-",
-            f"{overall_max_discrepancy:.2%}",
+            f"{overall_max_discrepancy:.6%}",
         )
         if verification_table:
             console.print(table)

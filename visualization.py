@@ -193,7 +193,6 @@ def _q(out, *args, cycle_config):
 
     refrigerant = cycle_config["refrigerant"]
     try:
-        property = PropsSI(out, *args, f"REFPROP::{refrigerant}")
         return PropsSI(out, *args, f"REFPROP::{refrigerant}")
     except Exception:
         return np.nan
@@ -393,6 +392,7 @@ def _isobar_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_lines=12, n_pts=200
 def _isenthalp_lines_ts(s_lo, s_hi, T_lo, T_hi, cycle_config, n_lines=18, n_pts=200):
     # Sample h range from corners of the visible TS window
     h_samples = []
+
     for s in np.linspace(s_lo, s_hi, 6):
         for T in np.linspace(T_lo, T_hi, 6):
             h_samples.append(_q("H", "T", T, "S", s, cycle_config=cycle_config))

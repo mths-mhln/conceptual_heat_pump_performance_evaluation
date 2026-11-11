@@ -1,76 +1,86 @@
-import CoolProp.CoolProp as CP
+# import CoolProp.CoolProp as CP
 import numpy as np
-from matplotlib import pyplot as plt
-from scipy.interpolate import CubicSpline
+# from matplotlib import pyplot as plt
+# from scipy.interpolate import CubicSpline
 
-from CoolProp.CoolProp import PropsSI
+# from CoolProp.CoolProp import PropsSI
 
-# print(CP.PropsSI("H", "S", 1200, "T", 320, "REFPROP::R1234ze(E)"))
+# # print(CP.PropsSI("H", "S", 1200, "T", 320, "REFPROP::R1234ze(E)"))
 
-# # 1732.4058913958568
+# # # 1732.4058913958568
 
 
-# print(CP.PropsSI("A", "S", 1260, "T", 260, "REFPROP::R1234ze(E)"))
-# print(PropsSI("A", "S", 1260, "T", 260, "REFPROP::R1234ze(E)"))
+# # print(CP.PropsSI("A", "S", 1260, "T", 260, "REFPROP::R1234ze(E)"))
+# # print(PropsSI("A", "S", 1260, "T", 260, "REFPROP::R1234ze(E)"))
 
 
 # print(PropsSI('T', 'D', 519.20049536, 'U', 259012.115143168, "HEOS::R1234ze(E)"))
-print(PropsSI('P', 'D', 519.20049536+0.1, 'U', 259012.115143168, "HEOS::R1234ze(E)"))
-print(PropsSI('P', 'D', 519.20049536-0.1, 'U', 259012.115143168, "HEOS::R1234ze(E)"))
-# print(PropsSI('T', 'D', 519.30813209, 'U', 259007.95005252, "HEOS::R1234ze(E)"))
-# print(PropsSI('T', 'D', 509.80352476, 'U', 258990.3212446, "HEOS::R1234ze(E)"))
-# print(PropsSI('S', 'D', 509.80352476, 'U', 258990.3212446, "HEOS::R1234ze(E)"))
+# print(PropsSI('P', 'D', 519.20049536+0.1, 'U', 259012.115143168, "HEOS::R1234ze(E)"))
+# print(PropsSI('P', 'D', 519.20049536-0.1, 'U', 259012.115143168, "HEOS::R1234ze(E)"))
+# # print(PropsSI('T', 'D', 519.30813209, 'U', 259007.95005252, "HEOS::R1234ze(E)"))
+# # print(PropsSI('T', 'D', 509.80352476, 'U', 258990.3212446, "HEOS::R1234ze(E)"))
+# # print(PropsSI('S', 'D', 509.80352476, 'U', 258990.3212446, "HEOS::R1234ze(E)"))
 
-# print(PropsSI('T', 'D', 529.00671099, 'U', 259033.71749167, "HEOS::R1234ze(E)"))
-# print(PropsSI('S', 'D', 529.00671099, 'U', 259033.71749167, "HEOS::R1234ze(E)"))
+# # print(PropsSI('T', 'D', 529.00671099, 'U', 259033.71749167, "HEOS::R1234ze(E)"))
+# # print(PropsSI('S', 'D', 529.00671099, 'U', 259033.71749167, "HEOS::R1234ze(E)"))
 
-# print(PropsSI('P', 'D', 3.8808791, 'U', -2314531.40885433, "HEOS::R1234ze(E)"))
-
-AS = CP.AbstractState("REFPROP", "Air")
-print(AS.T_critical())
-AS.update(CP.DmassUmass_INPUTS, 519.20049536, 259012.115143168)
-print(AS.first_partial_deriv(CP.iP, CP.iDmass, CP.iT))
-print(AS.T())
+# # print(PropsSI('P', 'D', 3.8808791, 'U', -2314531.40885433, "HEOS::R1234ze(E)"))
 
 
-AS.update(CP.SmassT_INPUTS, 1499.93, 376.2619149)
-print(AS.first_partial_deriv(CP.iP, CP.iDmass, CP.iT))
+
+# print("ping")
+# print(PropsSI('D', 'P', 6833552.881809819, 'H', 264812.07061240845, "REFPROP::R1234ze(E)"))
 
 
 
 
 
-# Input arrays:
-AS = CP.AbstractState("REFPROP", "R1234ze(E)")
-P_arr = np.array([6833552.88180982, 6870378.2427647])
-Dmass_arr = np.array([1126.11569909, 1126.25698619])
+
+# AS = CP.AbstractState("REFPROP", "Air")
+# print(AS.T_critical())
+# AS.update(CP.DmassUmass_INPUTS, 519.20049536, 259012.115143168)
+# print(AS.first_partial_deriv(CP.iP, CP.iDmass, CP.iT))
+# print(AS.T())
 
 
-print(PropsSI('T', 'D', Dmass_arr, 'P', P_arr, "HEOS::R1234ze(E)"))
+# AS.update(CP.SmassT_INPUTS, 1499.93, 376.2619149)
+# print(AS.first_partial_deriv(CP.iP, CP.iDmass, CP.iT))
 
 
-print(AS.update(CP.DmassP_INPUTS, Dmass_arr[0], P_arr[0]))
-print(AS.T())
-print(AS.update(CP.DmassP_INPUTS, Dmass_arr[1], P_arr[1]))
-print(AS.T())
 
 
-print(PropsSI("d(P)/d(D)|T", 'D', 519.20049536+0.1, 'U', 259012.115143168, "HEOS::R1234ze(E)"))
-AS.update(CP.DmassP_INPUTS, 519.20049536+0.1, 750077.39)
-print(AS.first_partial_deriv(CP.iP, CP.iDmass, CP.iT))
+
+# # Input arrays:
+# AS = CP.AbstractState("REFPROP", "R1234ze(E)")
+# P_arr = np.array([6833552.88180982, 6870378.2427647])
+# Dmass_arr = np.array([1126.11569909, 1126.25698619])
 
 
-@np.vectorize(otypes=[float])
-def update_and_get(D, P, output='T'):
-    AS.update(CP.DmassP_INPUTS, D, P)
-    return getattr(AS, output)()          # .T(), .Hmass(), .Smass(), etc.
+# print(PropsSI('T', 'D', Dmass_arr, 'P', P_arr, "HEOS::R1234ze(E)"))
 
 
-# # Vectorize it properly
-# vectorized_get = np.vectorize(update_and_get, otypes=[float])
+# print(AS.update(CP.DmassP_INPUTS, Dmass_arr[0], P_arr[0]))
+# print(AS.T())
+# print(AS.update(CP.DmassP_INPUTS, Dmass_arr[1], P_arr[1]))
+# print(AS.T())
 
-T_arr = update_and_get(Dmass_arr, P_arr, output='T')
-print(T_arr)
+
+# print(PropsSI("d(P)/d(D)|T", 'D', 519.20049536+0.1, 'U', 259012.115143168, "HEOS::R1234ze(E)"))
+# AS.update(CP.DmassP_INPUTS, 519.20049536+0.1, 750077.39)
+# print(AS.first_partial_deriv(CP.iP, CP.iDmass, CP.iT))
+
+
+# @np.vectorize(otypes=[float])
+# def update_and_get(D, P, output='T'):
+#     AS.update(CP.DmassP_INPUTS, D, P)
+#     return getattr(AS, output)()          # .T(), .Hmass(), .Smass(), etc.
+
+
+# # # Vectorize it properly
+# # vectorized_get = np.vectorize(update_and_get, otypes=[float])
+
+# T_arr = update_and_get(Dmass_arr, P_arr, output='T')
+# print(T_arr)
 
 
 # vectorized_AS_updater = np.vectorize(lambda D, P: AS.update(CP.DmassP_INPUTS, D, P))
@@ -129,4 +139,41 @@ print(T_arr)
 # plt.scatter(519.2018, 750077.39)
 # plt.show()
 
+
+
+
+
+
+
+xNodes = np.array([0, 1, 2, 3, 4, 5.6, 7.5269, 8.249632, 15.14])
+
+
+
+def computeGridSpacing(xNodes):
+    """
+    Compute spacing between the physical geometry nodes, which is needed for the solver and for the mesh stretching if activated.
+
+    Arguments
+    ---------
+    xNodes : numpy array
+        The coordinates of the nodes along the 1D (x) axis, excluding halo nodes.
+
+    Returns
+    -------
+    dx : numpy array
+        The spacing between the nodes along the 1D (x) axis, excluding halo nodes.
+    """
+    dx = np.zeros_like(xNodes)
+    dx[0] = xNodes[1]-xNodes[0]
+    for i in range(1,len(dx)-1):
+        dx[i] = (xNodes[i+1]-xNodes[i])/2 + (xNodes[i]-xNodes[i-1])/2
+    dx[-1] = xNodes[-1]-xNodes[-2]
+    return dx
+
+
+
+dx = computeGridSpacing(xNodes)
+dx_2 = np.gradient(xNodes)
+print(dx)
+print(dx_2)
 

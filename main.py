@@ -141,7 +141,7 @@ def main(perform_verification: bool = True) -> float:
 
 if __name__ == "__main__":
     # Compute pure evaluation runtime by subtracting plot-generation overhead.
-    plot_saving_time = main(perform_verification=False)
+    plot_saving_time = main(perform_verification=True)
     end = timeit.default_timer()
     elapsed = end - start
     eval_time = max(0.0, elapsed - plot_saving_time)

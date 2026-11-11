@@ -1,6 +1,6 @@
 # Analysis Type
 # =============
-analysis_type = "substance_thermodynamic_diagrams"  # "single_configuration", "COP_vs_eff_investigation", or "substance_thermodynamic_diagrams"
+analysis_type = "single_configuration"  # "single_configuration", "COP_vs_eff_investigation", or "substance_thermodynamic_diagrams"
 # single_configuration       | evaluates conceptual heat pump cycle according to specifications
 # COP_vs_eff_investigation   | evaluates COP variation for different values of turbine and compressor efficiencies
 # substance_thermodynamic_diagrams | generates empty TS/PH diagrams for selected substances
@@ -8,12 +8,12 @@ analysis_type = "substance_thermodynamic_diagrams"  # "single_configuration", "C
 
 
 # refrigerant selection - depending on specification different specifications are necessary
-refrigerant = "R1234ze(E)"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "CO2"
+refrigerant = "CO2"  # "R1234ze(Z)", "MM", "R1234ze(E)", "R1233zd(E)", "CO2"
 
 
 
 # Substances to plot in "substance_thermodynamic_diagrams" analysis type
-substances_to_plot = ["R1234ze(E)"]
+substances_to_plot = ["R1233zd(E)"]
 show_diagrams = True
 show_spinodal = False 
 
@@ -24,9 +24,9 @@ show_spinodal = False
 if refrigerant != "CO2":
     T_h_in = 353.15             # [K] - 80 degC
     T_c_in = 287.15             # [K] - 15 degC (outside temp)
-    ṁ_h = 40                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
+    ṁ_h = 0.5                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
     cp_h = 1885                 # [J/kg/K] - steam at 250 degrees
-    ṁ_c = 40                    # [kg/s] - arbitrarily chosen
+    ṁ_c = 0.5                    # [kg/s] - arbitrarily chosen
     cp_c = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
     η_turb = 0.80               # [-] - from turbine maps
     η_compr = 0.78              # [-] - from compressor maps
@@ -35,7 +35,7 @@ if refrigerant != "CO2":
                                         # optimizer to stay away from this region
     ΔT_pp_min_evap = 10
     ΔT_pp_min_cond = 10
-    Q_out_req = 200000
+    Q_out_req = 10000
 
 # if refrigerant != "CO2":
 #     T_h_in = 320             # [K] - 80 degC  353.15
@@ -56,9 +56,9 @@ if refrigerant != "CO2":
 if refrigerant == "CO2":
     T_h_in = 320             # [K] - 80 degC  353.15
     T_c_in = 290             # [K] - 15 degC (outside temp)
-    ṁ_h = 40                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
+    ṁ_h = 0.5                    # [kg/s] - BOTE calculation using typical refrigerant mass flow
     cp_h = 1885                 # [J/kg/K] - steam at 250 degrees
-    ṁ_c = 80                    # [kg/s] - arbitrarily chosen
+    ṁ_c = 0.5                    # [kg/s] - arbitrarily chosen
     cp_c = 1006                 # [J/kg/K] - air at 30 degrees and atmospheric pressure
     η_turb = 0.87               # [-] - from turbine maps
     η_compr = 0.78              # [-] - from compressor maps
@@ -67,7 +67,7 @@ if refrigerant == "CO2":
                                         # optimizer to stay away from this region
     ΔT_pp_min_evap = 10
     ΔT_pp_min_cond = 10
-    Q_out_req = 200000
+    Q_out_req = 10000
 
 cycle_config = {
     "T_h_in": T_h_in,

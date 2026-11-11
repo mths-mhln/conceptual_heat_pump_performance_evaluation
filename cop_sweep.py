@@ -9,7 +9,7 @@ from visualization import make_COP_vs_eff_plot
 
 def _build_efficiency_grid(n):
     eta_turb_arr = np.linspace(0.01, 1.0, n)
-    eta_compr_arr = np.linspace(0.01, 1.0, n)
+    eta_compr_arr = np.linspace(0.5, 1.0, n)
     X, Y = np.meshgrid(eta_turb_arr, eta_compr_arr)
     return eta_turb_arr, eta_compr_arr, X, Y
 
