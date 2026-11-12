@@ -93,7 +93,7 @@ cycle_config = {
 if analysis_type == "single_configuration":
     general_config = {
         "analysis_type": analysis_type,
-        "visualization_method": "CoolProp",  # "CoolProp" or "NiceProp" (NiceProp not implemented)
+        "visualization_method": "CoolProp",  # "CoolProp" or "NiceProp" (NiceProp not implemented, )
         "resolution": "low",                 # "low" or "high"
         "ignore_coolprop_warnings": True,
         "opt_progress_fig_height": 3,

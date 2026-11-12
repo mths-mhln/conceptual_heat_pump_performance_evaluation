@@ -232,7 +232,7 @@ def _verification_path_with_isenthalpic_expansion(verification_data, cycle_confi
 
 
 
-# Axis-bound calculation
+# Axi bound calculation
 # ======================
 def _cycle_bounds_ts(cycle_data, cycle_config):
     ts_margin_s_left = general_config.get("ts_margin_s_left", 0.2)
@@ -1161,8 +1161,6 @@ def _make_empty_plot_ts(cycle_config, show_spinodal=False):
     ax.set_xlim(s_lo, s_hi)
     ax.set_ylim(T_lo, T_hi)
     ax.plot(s_dome, T_dome, color='black', lw=1.0, zorder=3)
-    ax.scatter(1203.6835821063594 ,312.2138484973677, s = 0.1)
-    ax.scatter(1203.6515242080186 ,312.504148610755, s = 0.1)
 
     _draw_isolines_labeled(
         ax, _quality_isolines_ts(T_lo, T_hi, cycle_config, n_pts=n_pts),
