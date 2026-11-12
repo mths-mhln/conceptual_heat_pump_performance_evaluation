@@ -1,21 +1,26 @@
-import os
 import sys
-cwd = os.getcwd()
-sys.path.append(f'{cwd}/verification/SOFTX-D-24-00232-main/scripts_and_examples/Python_examples/')
+from pathlib import Path
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.append(f'{SCRIPT_DIR}/SOFTX-D-24-00232-main/scripts_and_examples/Python_examples/')
+sys.path.append(f'{SCRIPT_DIR}/SOFTX-D-24-00232-main/python_modules/')
 
-from thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
+from CHPC.config import Config
+from CHPC.thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
+from CHPC.visualization import make_thdy_plot
+from CHPC.logger import setup_logger
 from HP_CoolProp_example import MTW_HP_calculator
-from visualization import make_thdy_plot
-from logger import setup_logger
 import numpy as np
 import warnings
 
 from rich.console import Console
 from rich.table import Table
-from verification_config import cycle_config, general_config
 
 logger = setup_logger()
 console = Console()
+
+config = Config(f"{SCRIPT_DIR}/verification.ini")
+cycle_config = config.cycleConfig()
+general_config = config.generalConfig()
 
 
 def _append_verification_rows(table, refrigerant, perf, mtw_perf):
@@ -42,11 +47,8 @@ def _append_verification_rows(table, refrigerant, perf, mtw_perf):
 def verification(verification_table = False, generate_thdy_diagrams=False, threshold=0.05):
     logger.info("Code verification against Martin T. White's HP calculation tool")
     analysis_type = general_config["analysis_type"]
-    if general_config.get("ignore_coolprop_warnings", False):
-        warnings.filterwarnings("ignore", module=r"CoolProp(\\.|$)")
-        warnings.filterwarnings("ignore", message=r".*CoolProp.*")
 
-    if analysis_type == "single_configuration":
+    if analysis_type == "CHPC":
         table = Table(title="Verification Results", show_lines=False)
         table.add_column("Refrigerant", style="magenta")
         table.add_column("Metric", style="cyan")
@@ -60,9 +62,6 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
             logger.info(f"Evaluating conceptual heat pump cycle for refrigerant: {cycle_config['refrigerant']}")
             state = solve_cycle(cycle_config, general_config, verbose = False)
             perf = compute_performance(state, cycle_config, general_config)
-
-            if generate_thdy_diagrams:
-                logger.info("Rendering T-S diagram")
                 
             MTW_cycle_config = {
                 "T_h_in": cycle_config["T_h_in"],
@@ -94,26 +93,28 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
                 mtw_perf=MTW_cycle_performance_params[cycle_config["refrigerant"]],
             )
             overall_max_discrepancy = max(overall_max_discrepancy, max_discrepancy)
-            make_thdy_plot(
+            if generate_thdy_diagrams:
+                logger.info("Rendering T-S and P-H diagrams")
+                make_thdy_plot(
+                        state,
+                        perf,
+                        diagram_type="TS",
+                        cycle_config=cycle_config,
+                        output_dir=f"{SCRIPT_DIR}/thermodynamic_diagrams",
+                        ts_data=build_ts_data(state, cycle_config, general_config),
+                        verification_data=MTW_cycle_state_params[cycle_config["refrigerant"]],
+                        verbose=True,
+                    )
+                make_thdy_plot(
                     state,
                     perf,
-                    diagram_type="TS",
+                    diagram_type="PH",
                     cycle_config=cycle_config,
-                    output_dir="verification/thermodynamic_diagrams",
-                    ts_data=build_ts_data(state, cycle_config, general_config),
+                    output_dir=f"{SCRIPT_DIR}/thermodynamic_diagrams",
+                    ph_data=build_ph_data(state, cycle_config),
                     verification_data=MTW_cycle_state_params[cycle_config["refrigerant"]],
                     verbose=True,
                 )
-            make_thdy_plot(
-                state,
-                perf,
-                diagram_type="PH",
-                cycle_config=cycle_config,
-                output_dir="verification/thermodynamic_diagrams",
-                ph_data=build_ph_data(state, cycle_config),
-                verification_data=MTW_cycle_state_params[cycle_config["refrigerant"]],
-                verbose=True,
-            )
 
         table.add_section()
         table.add_row(
@@ -130,10 +131,7 @@ def verification(verification_table = False, generate_thdy_diagrams=False, thres
         else:
             logger.warning(f"Verification failed: Overall max. discrepancy of {overall_max_discrepancy:.2%} exceeds the threshold of {threshold:.2%}.\n")
     else:
-        logger.error(f"Invalid analysis type for verification: {analysis_type}. Please set to 'single_configuration'.")
+        logger.error(f"Invalid analysis type for verification: {analysis_type}. Please set to 'CHPC'.")
 
 if __name__ == "__main__":
-    verification()
-
-
-
+    verification(verification_table=True, generate_thdy_diagrams=True)

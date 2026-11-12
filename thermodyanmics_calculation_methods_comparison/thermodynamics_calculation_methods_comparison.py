@@ -1,16 +1,10 @@
-import os
-import sys
-cwd = os.getcwd()
-sys.path.append(f'{cwd}/')
-
 import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from config import cycle_config, general_config
-from logger import setup_logger
+from CHPC.logger import setup_logger
 
 
 logger = setup_logger()

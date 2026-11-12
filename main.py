@@ -1,51 +1,51 @@
 import os
 import sys
 cwd = os.getcwd()
-sys.path.append(f'{cwd}/verification/')
+sys.path.append(f'{cwd}/test/system_tests/')
 
-from thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
-from visualization import make_thdy_plot, make_empty_thdy_plot, make_optimizer_progress_plot
-from cop_sweep import run_cop_vs_eff_investigation
-from config import cycle_config, general_config
-from verification import verification
-from logger import setup_logger
+from CHPC.config import Config
+from CHPC.thermodynamics import solve_cycle, compute_performance, build_ts_data, build_ph_data
+from CHPC.cop_sweep import run_cop_vs_eff_investigation
+from CHPC.results import save_results, method_suffix
+from CHPC.logger import setup_logger
 
 from rich.console import Console
 from rich.table import Table
 
-import warnings
 import timeit
 
 
 logger = setup_logger()
-start = timeit.default_timer()
+
+# config file of the analysis. CHPC.ini evaluates a single cycle, COP_vs_eff.ini the COP for a grid of
+# turbine and compressor efficiencies. The cycle calculation method is selected in the config file.
+config_file = "config/CO2/COP_vs_eff.ini"
 
 
 
-def main(perform_verification: bool = True) -> float:
-    """Run the configured analysis workflow for the conceptual heat pump model.
+def main(config_file: str, perform_verification: bool = False) -> None:
+    """Run the analysis specified in the config file, and save its results to the results folder.
+    The diagrams are made afterwards with postprocess.py.
 
     Args:
+        config_file: Path to the .ini file with the analysis specifications.
         perform_verification: Whether to run verification checks before analysis.
-
-    Returns:
-        Total time spent rendering and saving plots, in seconds.
     """
-    plot_saving_time: float = 0.0
+    config = Config(config_file)
+    cycle_config = config.cycleConfig()
+    general_config = config.generalConfig()
 
     # Perform code verification:
     if perform_verification:
+        from verification import verification
         verification(verification_table=True, generate_thdy_diagrams=False)
 
-    # Select which analysis branch to run from the global configuration.
+    # Select which analysis branch to run from the configuration.
     analysis_type = general_config["analysis_type"]
-    if general_config.get("ignore_coolprop_warnings", False):
-        warnings.filterwarnings("ignore", module=r"CoolProp(\\.|$)")
-        warnings.filterwarnings("ignore", message=r".*CoolProp.*")
 
-    # Branch 1: solve one cycle, print KPIs, and export cycle-specific plots.
-    if analysis_type == "single_configuration":
-        logger.info("Evaluating conceptual heat pump cycle")
+    # Branch 1: solve one cycle, print KPIs, and save the cycle data for post processing.
+    if analysis_type == "CHPC":
+        logger.info(f"Evaluating conceptual heat pump cycle ({general_config['calculation_method']})")
         cycle_data = solve_cycle(cycle_config, general_config, verbose=False)
         perf = compute_performance(cycle_data, cycle_config, general_config)
         table = Table(title=f"Conceptual Heat Pump Cycle - {cycle_config['refrigerant']}", show_lines=False)
@@ -54,10 +54,10 @@ def main(perform_verification: bool = True) -> float:
         table.add_column("Unit", justify="center")
         table.add_column("Description", style="dim")
         rows = [
-            ("COP_is",      f"{perf['COP_is']:.2f}",        "—",  "Isentropic coefficient of performance"),
-            ("COP_turb",    f"{perf['COP_turb']:.2f}",       "—",  "Turbine-based coefficient of performance"),
-            ("COP_isenth",  f"{perf['COP_isenth']:.2f}",     "—",  "Isenthalpic coefficient of performance"),
-            ("PR",          f"{perf['PR']:.2f}",             "—",  "Pressure ratio across the compressor"),
+            ("COP_is",      f"{perf['COP_is']:.2f}",        "-",  "Isentropic coefficient of performance"),
+            ("COP_turb",    f"{perf['COP_turb']:.2f}",       "-",  "Turbine-based coefficient of performance"),
+            ("COP_isenth",  f"{perf['COP_isenth']:.2f}",     "-",  "Isenthalpic coefficient of performance"),
+            ("PR",          f"{perf['PR']:.2f}",             "-",  "Pressure ratio across the compressor"),
             ("ṁ_ref",       f"{perf['ṁ_ref']:.3f}",         "kg/s",  "Mass flow rate of the refrigerant"),
             ("Ẇ_turb",      f"{perf['Ẇ_turb']:.0f}",         "W",  "Turbine power output"),
             ("Ẇ_comp",      f"{perf['Ẇ_comp']:.0f}",         "W",  "Compressor power input"),
@@ -68,81 +68,26 @@ def main(perform_verification: bool = True) -> float:
         for symbol, value, unit, description in rows:
             table.add_row(symbol, value, unit, description)
         Console().print(table)
-        logger.info("Rendering T-S diagram")
-        t_plot = timeit.default_timer()
-        make_thdy_plot(
-            cycle_data,
-            perf,
-            diagram_type="TS",
+
+        refrigerant = cycle_config["refrigerant"]
+        results_file = save_results(
+            f"results/heat_pump_thermodynamic_diagrams/{refrigerant}/data/"
+            f"CHPC_{refrigerant}{method_suffix(general_config['calculation_method'])}.npz",
             cycle_config=cycle_config,
-            output_dir="heat_pump_thermodynamic_diagrams",
+            general_config=general_config,
+            cycle_data=cycle_data,
+            perf=perf,
             ts_data=build_ts_data(cycle_data, cycle_config, general_config),
-        )
-        plot_saving_time += timeit.default_timer() - t_plot
-        logger.info("Rendering P-H diagram")
-        t_plot = timeit.default_timer()
-        make_thdy_plot(
-            cycle_data,
-            perf,
-            diagram_type="PH",
-            cycle_config=cycle_config,
-            output_dir="heat_pump_thermodynamic_diagrams",
             ph_data=build_ph_data(cycle_data, cycle_config),
         )
-        plot_saving_time += timeit.default_timer() - t_plot
-        logger.info("Rendering optimizer progression plot")
-        t_plot = timeit.default_timer()
-        make_optimizer_progress_plot(
-            cycle_data.get("optimization_trace"),
-            cycle_config,
-            output_dir="heat_pump_thermodynamic_diagrams",
-        )
-        plot_saving_time += timeit.default_timer() - t_plot
+        logger.info(f"Results saved to {results_file}")
         logger.info("Evaluation Completed")
 
     # Branch 2: run parameter sweep to study COP sensitivity to component efficiency.
-    elif analysis_type == "COP_vs_eff_investigation":
+    elif analysis_type == "COP_vs_eff":
         run_cop_vs_eff_investigation(cycle_config, general_config, logger)
-        
-    # Branch 3: generate empty fluid-property diagrams for one or more substances.
-    elif analysis_type == "substance_thermodynamic_diagrams":
-        substances = general_config.get("substances_to_plot", [cycle_config["refrigerant"]])
-        logger.info(f"Generating empty thermodynamic diagrams for {len(substances)} substance(s)")
-        for substance in substances:
-            cycle_config_substance = dict(cycle_config)
-            cycle_config_substance["refrigerant"] = substance
-            logger.info(f"Rendering empty TS/PH diagrams for {substance}")
-            t_plot = timeit.default_timer()
-            make_empty_thdy_plot(
-                diagram_type="TS",
-                cycle_config=cycle_config_substance,
-                output_dir="substance_thermodynamic_diagrams",
-                show_diagrams=general_config['show_diagrams'], 
-                show_spinodal=general_config["show_spinodal"]
-            )
-            plot_saving_time += timeit.default_timer() - t_plot
-            t_plot = timeit.default_timer()
-            make_empty_thdy_plot(
-                diagram_type="PH",
-                cycle_config=cycle_config_substance,
-                output_dir="substance_thermodynamic_diagrams",
-                show_diagrams=general_config['show_diagrams'],
-                show_spinodal=general_config["show_spinodal"]
-            )
-            plot_saving_time += timeit.default_timer() - t_plot
-        logger.info("Substance thermodynamic diagram generation completed")
-    else:
-        logger.error(
-            f"Invalid analysis type: {analysis_type}. Please set to 'single_configuration', "
-            "'COP_vs_eff_investigation', or 'substance_thermodynamic_diagrams'."
-        )
-
-    return plot_saving_time
 
 if __name__ == "__main__":
-    # Compute pure evaluation runtime by subtracting plot-generation overhead.
-    plot_saving_time = main(perform_verification=True)
-    end = timeit.default_timer()
-    elapsed = end - start
-    eval_time = max(0.0, elapsed - plot_saving_time)
-    logger.info(f"Evaluation time (excl. plot rendering): {eval_time:.2f} seconds")
+    start = timeit.default_timer()
+    main(config_file, perform_verification=False)
+    logger.info(f"Evaluation time: {timeit.default_timer() - start:.2f} seconds")
